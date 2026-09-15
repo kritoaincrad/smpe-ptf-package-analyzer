@@ -1,370 +1,303 @@
 # SMP/E PTF Package Analyzer
 
-IBM z/OS için gönderilen **BMC / IBM SMP/E servis paketlerini** (`.pax.Z`, `.Z` ve
-bölünmüş `.XofY` parçaları) alıp; parçaları birleştiren, açan, içindeki SMP/E
-metadata'sını (SMPPTFIN / SMPMCS, HOLDDATA, GIMFAF.XML) okuyan ve her PTF'i
-açıklamasıyla birlikte listeleyen üretim kalitesinde bir analiz uygulaması.
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
+![PySide6](https://img.shields.io/badge/UI-PySide6%20%2F%20Qt-41CD52?logo=qt&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)
+![Version](https://img.shields.io/badge/Version-2.0.0-0B3D62)
 
-Windows ve Linux üzerinde, harici bir araç kurulmadan çalışır.
+IBM z/OS için hazırlanmış, yerel çalışan bir SMP/E servis paketi analiz uygulaması.
+BMC ve IBM tarzı `.pax.Z`, Unix `.Z` ve bölünmüş `.XofY` teslimatlarını birleştirir,
+paket içeriğini güvenli biçimde açar ve SMP/E metadatasını masaüstü arayüzünde
+incelenebilir hale getirir.
 
----
+Uygulama PySide6/Qt tabanlıdır. Analiz işlemleri kullanıcının bilgisayarında yapılır;
+web sunucusu veya tarayıcı gerektirmez.
 
-Uygulama PySide6/Qt tabanlı yerel masaüstü arayüzüyle çalışır. Dosyalar diskte
-işlenir; sunucu veya tarayıcı gerekmez.
+> [!IMPORTANT]
+> Bu proje IBM veya BMC tarafından geliştirilmiş ya da desteklenen resmî bir ürün
+> değildir. Ürün ve marka adları yalnızca desteklenen paket biçimlerini açıklamak
+> amacıyla kullanılmıştır.
 
-### Ürün özellikleri
+## Öne çıkan özellikler
 
-- Açık/koyu tema, kalıcı sütun görünürlüğü, sıralama ve yeniden kullanılabilir PTF filtre profilleri
-- Son kullanılan klasörü hatırlayan, alt klasörleri destekleyen Explorer sürükle-bırak akışı
-- Geçmişteki iki analizi eklenen/kaldırılan/değişen PTF düzeyinde karşılaştırma
-- PTF ilk/son görülme, FMID envanteri ve SHA-256 ile tekrar yüklenen paket tespiti
-- Analiz etiketi, notu, arşiv durumu ve doğrulanmış veritabanı yedekleme/geri yükleme
-- Yönetici özeti, PE, kritik HOLD ve aksiyon bölümleri içeren Excel/PDF kurumsal raporlar
-- Firma adı, rapor başlığı, logo ve raporlarda hassas yol/e-posta/IP maskeleme
-- Yazdırılabilir PTF detay görünümü ve analiz tamamlandı masaüstü bildirimi
-- Varsayılan çevrimdışı analiz; analiz boyunca outbound socket bağlantıları engellenir
-- Arşiv traversal, aşırı member, büyük member ve olağandışı açılma oranı korumaları
-- Opsiyonel SQLCipher geçmiş şifrelemesi ve Ed25519 imzalı güncelleme manifesti
+- `.XofY` parçalarını algılama, numerik sıralama ve eksik/çakışan parça kontrolü
+- Unix `.Z` için dahili LZW decoder ve yapılandırılabilir fallback zinciri
+- PAX, TAR, GZIP ve iç içe GIMZIP tarzı arşivleri inceleme
+- SMPPTFIN, SMPMCS, HOLDDATA, GIMFAF ve GIMPAF metadata analizi
+- PTF, APAR, FMID, PRE, REQ, SUP, element, HOLD ve açıklama çıkarımı
+- Kritik `ERROR HOLD` kayıtlarından PE (PTF in error) tespiti
+- Arama, sıralama, sütun seçimi ve yeniden kullanılabilir filtre profilleri
+- Açık/koyu tema ve tüm analiz boyunca yanıt veren yerel masaüstü arayüzü
+- Analiz geçmişi, not/etiket/arşivleme ve SHA-256 tabanlı tekrar teslimat tespiti
+- İki teslimat arasında eklenen, kaldırılan ve değişen PTF karşılaştırması
+- CSV, JSON, Excel ve PDF dışa aktarma; yazdırılabilir PTF detayları
+- Yönetici özeti, kritik HOLD ve aksiyon bölümleri içeren kurumsal raporlar
+- Firma adı, rapor başlığı ve logo ile rapor özelleştirme
+- Rapor ve loglarda yerel yol, e-posta ve IP adresi maskeleme
+- İsteğe bağlı SQLCipher veritabanı şifrelemesi
+- Çevrimdışı analiz modu ve imzalı güncelleme manifesti desteği
+- Windows bildirimleri, veritabanı yedekleme ve doğrulanmış geri yükleme
 
----
+## Uygulama akışı
 
-## 1. Kurulum
+```mermaid
+flowchart LR
+    A[Dosyaları seç veya sürükle] --> B[Parçaları doğrula]
+    B --> C[SHA-256 ve paket gruplama]
+    C --> D[Birleştir ve aç]
+    D --> E[Arşiv üyelerini sınıflandır]
+    E --> F[SMP/E metadatasını ayrıştır]
+    F --> G[PTF ve HOLD envanteri]
+    G --> H[Karşılaştırma ve raporlama]
+```
 
-```bash
+Analiz ayrı bir worker thread üzerinde çalışır. Uzun süren açma ve ayrıştırma
+işlemleri sırasında arayüz kullanılabilir kalır; aşama, yüzde, geçen süre ve canlı
+log bilgisi gösterilir. İşlem gerektiğinde iptal edilebilir.
+
+## Gereksinimler
+
+- Windows 10 veya Windows 11
+- Python 3.11 veya üzeri
+- Bağımlılıkları kurmak için `pip`
+
+Temel bağımlılıklar `requirements.txt` içinde tutulur:
+
+- `PySide6`: yerel Qt arayüzü
+- `pandas`: tablo ve rapor verisi
+- `openpyxl`: Excel çıktısı
+- `cryptography`: imzalı güncelleme doğrulaması
+- `unlzw3`: isteğe bağlı ikinci `.Z` decoder
+
+Uygulamanın kendi LZW decoder'ı bulunduğu için `unlzw3` veya 7-Zip olmadan da
+Unix `.Z` dosyaları işlenebilir.
+
+## Kurulum
+
+Depoyu GitHub'daki **Code** düğmesiyle klonlayın veya ZIP olarak indirin. Ardından
+proje klasöründe bir sanal ortam oluşturun:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Gereksinim: **Python 3.11+**. `unlzw3` ve 7-Zip opsiyoneldir; uygulamanın kendi
-`.Z` decoder'ı her zaman mevcuttur.
+Uygulamayı başlatın:
 
-Geçmişi SQLCipher ile şifrelemek için Preferences > Security seçeneğini açın,
-`PTFANALYZER_DB_KEY` ortam değişkenini tanımlayın ve uyumlu `sqlcipher3` veya
-`pysqlcipher3` sürücüsünü kurun. Anahtar uygulama ayarlarına kaydedilmez.
-
-İmzalı güncelleme kontrolü için `PTFANALYZER_UPDATE_MANIFEST_URL` ve base64
-Ed25519 public key içeren `PTFANALYZER_UPDATE_PUBLIC_KEY` tanımlanmalıdır.
-Offline mode açıkken uygulama güncelleme sunucusuna bağlanmaz.
-
-Windows `.exe` üretimi `scripts/build_windows.ps1` ile yapılır. Kurumsal PFX
-sertifikası `SIGN_PFX_PATH` ve `SIGN_PFX_PASSWORD` üzerinden verilirse çıktı
-SHA-256 + timestamp ile imzalanır ve imza build sonunda doğrulanır. Sertifika
-ve parolası repoya yazılmaz.
-
-### Masaüstü uygulaması (PySide6 / Qt)
-
-```bash
+```powershell
 python desktop_app.py
-python desktop_app.py example-package.*   # parçaları doğrudan yükleyerek aç
 ```
 
-Masaüstü arayüzü:
+Dosyalar arayüze sürüklenebilir veya **File > Add files / Add folder** üzerinden
+seçilebilir. İstenirse tam dosya yolları başlangıçta argüman olarak verilebilir:
 
-* üst kısımda **dropdown menü çubuğu** — File / Analysis / History / View / Tools / Help
-  (klavye: `Ctrl+O` dosya ekle, `F5` analiz, `Ctrl+H` geçmiş, `Ctrl+,` tercihler,
-  `Ctrl+1..6` sekmeler),
-* **History > Recent analyses** ile son analizler tek tıkla açılır; History sekmesinde
-  tümü listelenir, aranır, yeniden adlandırılır, silinir,
-* **Tools > Preferences** — kategorili (Decompression / SMP/E metadata / History /
-  Diagnostics), her ayarın altında ne işe yaradığını anlatan açıklama; ayarlar
-  `QSettings` ile kalıcı saklanır,
-* sol panelde dosya listesi, tespit edilen paketler ve canlı ilerleme kartı.
-
-Başlıca özellikler:
-
-* dosyalar **sürükle-bırak** ile veya `Add folder...` ile klasörden toplu eklenir,
-* dosyalar diskte oldukları yerden okunur — **kopyalanmaz**; yalnızca birleştirilmiş
-  ve açılmış akış geçici dizine yazılır (yüzlerce MB'lık paketlerde belirgin fark),
-* seçilen dosyalar arka planda hash'lenip gruplanır; eksik parça daha **Analyze**
-  demeden ağaçta görünür,
-* analiz ayrı bir iş parçacığında çalışır: pencere donmaz, ilerleme çubuğu ve
-  **Cancel** vardır, log satırları akarken görünür,
-* PTF tablosu ile detay paneli yan yanadır; satır seçtikçe detay anında güncellenir,
-* yerel dosyalar için uygulama kaynaklı bir yükleme boyutu sınırı yoktur.
-
----
-
-## 2. Mimari
-
-Her aşama bağımsız bir modüldür; her biri ayrı test edilebilir ve bir aşamanın
-hatası diğer paketleri durdurmaz.
-
-```
-uploads ─► parts ─► gruplama/doğrulama ─► birleştirme ─► .Z açma ─► PAX/TAR
-        ─► SMPPTFIN / HOLDDATA / GIMFAF ─► MCS parse ─► PTF nesneleri ─► UI
+```powershell
+python desktop_app.py "C:\Packages\delivery.1of3" "C:\Packages\delivery.2of3" "C:\Packages\delivery.3of3"
 ```
 
-| Modül | Sorumluluk |
+## Desteklenen teslimat yapıları
+
+| Yapı | Örnek | Davranış |
+|---|---|---|
+| Tek parça | `delivery.pax.Z` | Doğrudan algılanır ve analiz edilir |
+| Bölünmüş paket | `delivery.1of3` ... `delivery.3of3` | Numerik sırayla birleştirilir |
+| Büyük/küçük harf varyasyonu | `.01OF07`, `_3of4`, `-1 of 2` | Parça numarası ve toplam sayı algılanır |
+| PAX/TAR | `.pax`, `.tar` | Arşiv doğrudan okunur |
+| GZIP | `.gz` | Format algılanarak açılır |
+| İç içe paket | GIMZIP tarzı arşiv | Ayarlanan derinliğe kadar taranır |
+| TSO XMIT | `INMR01` imzalı akış | Tanınır, ancak açılmaz |
+
+Parça doğrulaması analiz başlamadan önce yapılır. Eksik parça, aynı sıra numarasıyla
+farklı içerik, tutarsız toplam parça sayısı ve yinelenen teslimatlar açık durum
+mesajlarıyla gösterilir.
+
+## Analiz ekranları
+
+| Ekran | İçerik |
 |---|---|
-| `parts.py` | `.XofY` tespiti, **numerik** sıralama, eksik/duplicate/çakışma kontrolü, SHA-256, birleştirme |
-| `compression.py` | `.Z` magic byte doğrulama, dahili LZW decoder + encoder, fallback zinciri |
-| `archive.py` | PAX/TAR listeleme, rol tespiti (SMPPTFIN/HOLDDATA/GIMFAF), iç içe arşivler |
-| `encoding.py` + `ebcdic.py` | EBCDIC/ASCII tespiti, Python'da bulunmayan `cp1047` codec'i |
-| `records.py` | 80-byte fixed record ayrıştırma, sütun 73-80 (sequence) kuralı |
-| `mcs.py` | MCS statement tokenizer'ı (comment/quote/parantez farkındalıklı) |
-| `smpe.py` | SYSMOD (PTF/APAR/USERMOD) birleştirme, element/HOLD/bağımlılık çıkarımı |
-| `holddata.py`, `gimfaf.py` | HOLDDATA ve GIMFAF/GIMPAF XML çözümleme |
-| `pipeline.py` | Uçtan uca orkestrasyon, hata izolasyonu, workspace yönetimi |
-| `progress.py` | Aşama bazlı ilerleme olayları (arayüzden bağımsız) |
-| `serialize.py` | Raporun JSON'a ve JSON'dan tam sadakatli dönüşümü |
-| `database.py` | SQLite analiz geçmişi, PTF indeksi ve arama |
-| `export.py` | pandas tabloları, CSV/JSON rapor |
+| **Summary** | Paket durumu, format, decoder, encoding, boyut ve uyarılar |
+| **PTFs** | Aranabilir PTF listesi, FMID/PE/HOLD filtreleri ve detay görünümü |
+| **HOLDDATA** | HOLD ve RELEASE kayıtları; kritik ERROR HOLD vurguları |
+| **Package contents** | Arşiv üyeleri, roller ve GIMFAF/GIMPAF metadatası |
+| **Logs** | Seviyeye göre filtrelenebilen yapılandırılmış analiz logları |
+| **History** | Kaydedilmiş analizler, notlar, etiketler ve arşiv durumu |
+| **Compare** | İki analiz arasındaki PTF farkları |
+| **Inventory** | PTF/FMID görünürlüğü ve yinelenen paket fingerprint'leri |
 
-Masaüstü arayüzü motora bağımlıdır; analiz motoru Qt import etmez:
+## Raporlama
 
-| Modül | Sorumluluk |
+Uygulama aşağıdaki çıktıları üretebilir:
+
+- Filtrelenebilir PTF listesi için CSV
+- Tam analiz kaydı için JSON
+- Yapılandırılmış loglar için CSV
+- Birden fazla çalışma sayfasına sahip Excel raporu
+- Yazdırılabilir kurumsal PDF raporu
+- Seçilen PTF için baskı önizlemesi
+
+Excel ve PDF raporlarında yönetici özeti, paket/PTF sayaçları, PE kayıtları,
+kritik HOLD'lar ve karşılaştırma sonuçları bulunabilir. Firma adı, başlık ve logo
+**Tools > Preferences > Reports** bölümünden ayarlanır.
+
+## Geçmiş ve yerel veri
+
+Analiz geçmişi varsayılan olarak yerel bir SQLite veritabanında saklanır:
+
+```text
+%LOCALAPPDATA%\PTFAnalyzer\analyses.db
+```
+
+Konum `PTFANALYZER_DB` ortam değişkeniyle değiştirilebilir. Veritabanı;
+analiz özetlerini, paket fingerprint'lerini, aranabilir PTF indeksini ve raporun
+yeniden açılması için gerekli kayıtları içerir. Ham ve büyük geçici arşiv verileri
+saklanmaz.
+
+History ekranından:
+
+- analizler yeniden adlandırılabilir, notlandırılabilir ve arşivlenebilir,
+- bir PTF'nin ilk ve son görüldüğü teslimatlar bulunabilir,
+- yinelenen paket fingerprint'leri görüntülenebilir,
+- veritabanı yedeklenebilir ve bütünlük kontrolünden sonra geri yüklenebilir.
+
+## Güvenlik ve gizlilik
+
+- Paketler yerel olarak işlenir; varsayılan analiz modu çevrimdışıdır.
+- Çevrimdışı koruma analiz süresince outbound socket bağlantılarını engeller.
+- Arşiv traversal girişimleri, aşırı member sayısı ve çok büyük member'lar reddedilir.
+- Geçici çalışma dosyaları analiz workspace'i kapatılırken temizlenir.
+- Rapor ve log maskelemesi Windows/UNC/home yollarını, e-postaları ve IPv4
+  adreslerini anonimleştirebilir.
+- Güncelleme kontrolü yalnızca yapılandırılmış HTTPS manifestini ve geçerli
+  Ed25519 imzasını kabul eder.
+- Sertifika, veritabanı anahtarı ve benzeri sırlar repoya kaydedilmez.
+
+> [!WARNING]
+> Paket analizi güvenilmeyen verilerin ayrıştırılmasını içerir. Limitleri kapatmadan
+> önce kaynağın güvenilir olduğundan emin olun ve büyük teslimatları yeterli boş disk
+> alanına sahip bir sistemde çalıştırın.
+
+### Opsiyonel veritabanı şifrelemesi
+
+SQLCipher uyumlu bir Python sürücüsü (`sqlcipher3` veya `pysqlcipher3`) kurun,
+ardından anahtarı yalnızca çalışma ortamına verin:
+
+```powershell
+$env:PTFANALYZER_DB_KEY = "your-strong-secret"
+python desktop_app.py
+```
+
+Son olarak **Preferences > Security > Encrypt history database with SQLCipher**
+seçeneğini etkinleştirin ve uygulamayı yeniden başlatın. Anahtar QSettings'e veya
+veritabanına yazılmaz.
+
+## Yapılandırma değişkenleri
+
+| Değişken | Amaç |
 |---|---|
-| `desktop/` | PySide6 masaüstü arayüzü (`theme`, `models`, `widgets`, `worker`, `main_window`) |
+| `PTFANALYZER_DB` | SQLite/SQLCipher veritabanı yolunu değiştirir |
+| `PTFANALYZER_DB_KEY` | SQLCipher geçmiş veritabanı anahtarı |
+| `PTFANALYZER_UPDATE_MANIFEST_URL` | İmzalı güncelleme manifestinin HTTPS adresi |
+| `PTFANALYZER_UPDATE_PUBLIC_KEY` | Base64 kodlu Ed25519 public key |
+| `SIGN_PFX_PATH` | Yerel Windows build'i için PFX sertifika yolu |
+| `SIGN_PFX_PASSWORD` | PFX sertifika parolası |
 
----
+## Windows executable oluşturma
 
-## 3. Gerçek zamanlı ilerleme
+PyInstaller'ı kurun ve build betiğini çalıştırın:
 
-Analiz opak tek bir adım değil; her aşama `ptfanalyzer/progress.py` üzerinden
-rapor verir ve arayüz ne yapıldığını anlık gösterir:
-
+```powershell
+python -m pip install -r requirements.txt pyinstaller
+.\scripts\build_windows.ps1 -Version "2.0.0"
 ```
-  [ 29%] Package 1/2 - Decompressing: 214.6 MB of 486.0 MB
-  [ 71%] example-package - Parsing SMPPTFIN: 12,400 statements
+
+Çıktı:
+
+```text
+dist\PTF-Analyzer-2.0.0.exe
 ```
 
-Aşamalar ve genel yüzdeye ağırlıkları: dosyaları okuma/hash'leme (4), parçaları
-birleştirme (8), format tespiti (1), **.Z açma (45)**, arşivi okuma (14),
-**SMP/E metadata parse (25)**, HOLDDATA (2), bitiriş (1). Yüzde
-`(paket indeksi + paket içi ilerleme) / paket sayısı` ile hesaplanır, yani çok
-paketli yüklemelerde de doğru ilerler ve **hiçbir zaman geriye gitmez**.
+Betik build sonunda SHA-256 değerini yazdırır. `SIGN_PFX_PATH` ve
+`SIGN_PFX_PASSWORD` tanımlıysa Windows SDK içindeki `signtool.exe` kullanılarak
+binary SHA-256 ve güvenilir timestamp ile imzalanır; imza daha sonra doğrulanır.
 
-* **Masaüstü:** sol altta PROGRESS kartı — yüzde çubuğu, o an yapılan iş
-  ("Decompressing: 214.6 MB of 486.0 MB"), aşama adı, geçen süre ve **Cancel**.
-  Log satırları da akarken görünür.
+### GitHub Actions ile build
 
-Olaylar 80 ms'de bir sınırlandırılır (`THROTTLE_SECONDS`), yani milyonlarca
-kayıtlık bir SMPPTFIN'de bile arayüz yavaşlamaz.
+`.github/workflows/windows-build.yml` workflow'u **Actions > Windows desktop
+build > Run workflow** üzerinden sürüm numarası verilerek manuel çalıştırılabilir.
+Üretilen `.exe` workflow artifact'i olarak yüklenir.
 
----
+İmzalı artifact için repository secrets bölümüne aşağıdaki değerleri ekleyin:
 
-## 4. Yerel veritabanı (analiz geçmişi)
-
-Her analiz **SQLite**'a kaydedilir ve sonradan tekrar açılabilir — paket bir kez
-işlenir. Ek bağımlılık yoktur, veritabanı tek dosyadır ve herhangi bir SQL
-aracıyla incelenebilir.
-
-Konum (`PTFANALYZER_DB` ortam değişkeniyle değiştirilebilir):
-
-| Platform | Yol |
+| Secret | İçerik |
 |---|---|
-| Windows | `%LOCALAPPDATA%\PTFAnalyzer\analyses.db` |
-| Linux | `~/.local/share/ptfanalyzer/analyses.db` |
-| macOS | `~/Library/Application Support/PTFAnalyzer/analyses.db` |
+| `SIGN_PFX_BASE64` | PFX dosyasının Base64 içeriği |
+| `SIGN_PFX_PASSWORD` | PFX parolası |
 
-Şema:
+Bu secrets tanımlı değilse build tamamlanır ancak executable imzasız olur.
 
-| Tablo | İçerik |
-|---|---|
-| `analyses` | Her koşu için bir satır: tarih, etiket, süre, sayaçlar ve **raporun tamamı JSON olarak** |
-| `packages` | Paket başına özet (statü, parça sayısı, decoder, fingerprint) |
-| `ptf_index` | PTF başına bir satır — **tüm analizlerde PTF/APAR/FMID/açıklama araması** için |
+## Mimari
 
-Arayüzdeki **History** sekmesi: kayıtlı analizleri listeler, filtreler, açar,
-yeniden adlandırır, siler; ayrıca "Find a PTF across every stored analysis"
-kutusu ile geçmişteki bütün paketlerde PTF arar (çift tıklayınca ilgili analiz
-açılır). Kayıt, Options panelindeki *Save every analysis to the local database*
-ile kapatılabilir.
+Analiz motoru Qt'den bağımsızdır; masaüstü katmanı yalnızca motorun modellerini ve
+olaylarını görüntüler.
 
-Saklanmayanlar (büyük ve yeniden üretilebilir oldukları için): ham MCS statement
-nesneleri (geri yüklenen analizde *Raw MCS* sekmesi boştur) ve geçici workspace
-dosyaları. Bunun dışındaki her şey — PTF'ler, açıklamalar, bağımlılıklar,
-element ve HOLD listeleri, arşiv üyeleri, encoding bilgisi, hata/uyarılar ve
-loglar — birebir geri yüklenir.
-
-Başarısız analizler de saklanır: "bu paket şu tarihte şu sebeple açılamadı"
-kaydı, sorunu satıcıya bildirirken işe yarar.
-
----
-
-## 5. Desteklenen dosya yapısı
-
-```
-example-package.1of3
-example-package.2of3
-...
-example-package.3of3
+```text
+desktop_app.py
+├── desktop/                 PySide6 masaüstü uygulaması
+│   ├── main_window.py       Ana pencere ve kullanıcı akışları
+│   ├── models.py            Qt tablo/proxy modelleri
+│   ├── widgets.py           Yeniden kullanılabilir bileşenler
+│   ├── preferences.py       Kategorili ayarlar penceresi
+│   ├── theme.py             Açık/koyu tema ve etkileşim durumları
+│   └── worker.py            Arka plan analiz işleri
+├── ptfanalyzer/             UI'dan bağımsız analiz motoru
+│   ├── parts.py             Parça algılama, doğrulama ve SHA-256
+│   ├── compression.py       Format tespiti ve .Z decoder zinciri
+│   ├── archive.py           Güvenli PAX/TAR ve nested arşiv işleme
+│   ├── records.py           Fixed-record ayrıştırma
+│   ├── mcs.py / smpe.py     SMP/E statement ve SYSMOD analizi
+│   ├── database.py          Geçmiş ve envanter
+│   ├── reporting.py         Excel/PDF raporlama
+│   └── security.py          Maskeleme ve çevrimdışı koruma
+└── scripts/
+    └── build_windows.ps1    Windows executable üretimi ve imzalama
 ```
 
-* Uzantı olmayabilir; `.1of7`, `.01OF07`, `_3of4`, `-1 of 2`, `.1of7.Z` biçimleri tanınır.
-* Sıralama **her zaman numeriktir** — `10of12`, `9of12`'den sonra gelir. Alfabetik
-  sıraya asla güvenilmez.
-* Tek parçalı paketler (`package.pax.Z`) de desteklenir.
+## Decoder sırası
 
-### Doğrulamalar
-
-| Durum | Davranış |
-|---|---|
-| `1,2,3,5,6,7` yüklendi | `Part 4 is missing.` — analiz durur, sebep açıkça yazılır |
-| `1,3,7` yüklendi | `Parts 2, 4, 5, 6 are missing.` |
-| Aynı parça iki kez, **aynı** içerik | Duplicate olarak işaretlenir, bir kez işlenir |
-| Aynı parça iki kez, **farklı** içerik | Hata: `Part 1 was supplied twice with different content` |
-| `.1of7` ve `.2of8` karışık | Hata: `Inconsistent part counts` |
-
-### Duplicate paket kontrolü
-
-Tüm dosyalar SHA-256 ile karşılaştırılır:
-
-* `paket.1of7` + `paket(1).1of7` → aynı pakete ait kopya; yok sayılır ve
-  **Duplicate package detected** uyarısı gösterilir.
-* İçerik olarak birebir aynı ama farklı isimli iki paket → ikincisi
-  `DUPLICATE` statüsüyle listelenir, tekrar analiz edilmez
-  (isteğe bağlı olarak "Analyze duplicate packages too" ile açılabilir).
-
----
-
-## 6. `.Z` açma ve fallback stratejisi
-
-Birleştirilen akış önce magic byte ile doğrulanır:
-
-```
-data[:2] == b"\x1f\x9d"
-```
-
-Geçersizse teknik detay yerine okunabilir hata verilir:
-
-```
-Invalid Unix .Z stream.
-Expected magic bytes: 1F 9D
-Detected: 50 4B
-```
-
-Ek olarak gerçek format tespit edilip ipucu verilir (gzip, ZIP, TSO XMIT,
-sıkıştırılmamış TAR vb.). Sıkıştırılmamış PAX ve gzip akışları doğrudan işlenir.
-
-Decoder sırası (ilk başarılı olan kazanır):
+Unix `.Z` akışları için decoder'lar ilk başarılı sonuç alınana kadar denenir:
 
 1. `unlzw3` (kuruluysa)
-2. **Dahili LZW decoder** (her zaman mevcut, bağımlılıksız)
-3. 7-Zip (`7z` / `7za` / `7zz`, Windows'ta Program Files dahil aranır)
-4. `uncompress` / `gzip` / `zcat`
+2. Dahili saf Python LZW decoder
+3. 7-Zip (`7z`, `7za` veya `7zz`)
+4. Sistem `uncompress`, `gzip` veya `zcat` araçları
 
-Bir decoder patlarsa uygulama çökmez; log'a
+Bir decoder başarısız olduğunda hata loglanır ve sıradaki seçenek denenir. Tüm
+seçenekler başarısız olursa kullanıcıya eksik parça, hatalı sıra veya ASCII FTP
+aktarımı gibi muhtemel nedenleri içeren anlaşılır bir hata gösterilir.
 
-```
-'unlzw3' failed: ... Trying fallback decoder 'built-in LZW decoder'...
-```
+## Bilinen sınırlamalar
 
-yazılır ve sıradaki denenir. Hepsi başarısız olursa tek bir özet hata ve olası
-sebepler (eksik parça, yanlış sıra, ASCII modunda FTP) gösterilir. Python
-traceback'i yalnızca **Debug Mode** açıkken görünür.
-
-> **Performans:** dahili saf-Python decoder metin ağırlıklı veride ~10 MB/s,
-> binary ağırlıklı veride ~2.5 MB/s üretir. Bu yüzden 96 MB üzerindeki paketlerde
-> (ayarlanabilir) varsa harici araçlar öne alınır.
-
-### Dahili LZW uygulaması hakkında
-
-Unix `compress` formatı kayıtsız ve tuzaklıdır. Bu uygulamadaki kritik noktalar:
-
-* kod genişliği her seviyede tam `2^(w-1)` kod sonra artar,
-* genişlik artışında ve `CLEAR` kodunda çıkış, **o genişlik bölümünün başına
-  göre** 8'lik kod grubuna hizalanır (mutlak dosya konumuna göre değil),
-* decoder sözlükte encoder'ın bir adım gerisindedir.
-
-Üretilen akışlar standart `gzip -d` / `uncompress` decoder'larıyla uyumludur.
-
----
-
-## 7. Arşiv içeriği
-
-Açılan akış `tarfile` ile PAX/TAR olarak okunur. Aranan üyeler dizin altında
-olabileceği için **exact path değil, isim soneki** ile aranır:
-
-```python
-member.name.upper().endswith("SMPPTFIN")
-```
-
-Aranan roller: `SMPPTFIN`, `SMPMCS`, `HOLDDATA`, `GIMFAF.XML`, `GIMPAF.XML`,
-`GIMZIP.XML`. GIMZIP tarzı paketlerde iç içe arşivlere (`.pax`, `.pax.Z`)
-yapılandırılabilir derinlikte inilir. Sadece ilgili üyeler belleğe okunur;
-gigabaytlık RELFILE'lar yalnızca listelenir.
-
-Arşiv değilse (ör. düz sequential data set image) akışın tamamı tek bir SMP/E
-girdisi gibi analiz edilir. Kırpılmış arşivlerde listeleme çöker değil,
-"archive ends unexpectedly / truncated" uyarısı verilir.
-
----
-
-## 8. Encoding tespiti
-
-SMPPTFIN genellikle EBCDIC'tir. Sırasıyla `cp037`, `cp500`, `cp1047`, `cp273`,
-`cp870`, `utf-8`, `latin-1` denenir ve her biri gerçek SMP/E token'ları için
-puanlanır:
-
-```
-++PTF(   ++VER(   ++APAR(   ++HOLD(   FMID(   PRE(   SUP(   REQ(  ...
-```
-
-En çok token üreten encoding seçilir; böylece binary dosya yanlış encoding ile
-okunup anlamsız karakter üretmez. Hiç token yoksa ve içerik yeterince okunabilir
-değilse (%85 altı) member binary kabul edilir ve açık bir hata verilir.
-
-> **Not:** Python `cp1047` codec'ini içermez. Uygulama bunu `ebcdic.py` içinde
-> `cp037` üzerinden üç kod noktası çiftini takas ederek kaydeder
-> (`^`↔`¬`, `[`, `]` konumları) — z/OS C kaynaklarının `X'AD'`/`X'BD'` kullanmasının
-> sebebi de budur. SMP/E sözdiziminde kullanılan karakterler her üç kod sayfasında
-> aynı olduğundan fark yalnızca açıklama metinlerinde görünür.
-
----
-
-## 9. SMP/E kayıt yapısı ve MCS parse
-
-* Satır sonu yoksa veri **80 byte'lık sabit record'lara** bölünür.
-* Sütun **73-80 sequence number** alanıdır ve SMP/E gibi yok sayılır
-  (arayüzden kapatılabilir).
-* Bir statement, parantez/tırnak/comment dışındaki ilk `.` karakterine kadar
-  sürer; istediği kadar record'a yayılabilir.
-* Record'lar **araya boşluk konmadan** birleştirilir — SMP/E bir operand'ın
-  72. sütunda bölünmesine izin verir, bu sayede `FM` + `ID(FMID001)` doğru
-  şekilde `FMID(FMID001)` olur.
-* `/* ... */` yorumları yakalanır (PTF açıklamaları buradadır); yorum içindeki
-  `.` statement'ı bitirmez.
-* `COMMENT(...)` gibi serbest metin operand'ları virgülden bölünmez.
-* Dosya başındaki yorum bloğu **paket başlığı** olarak ayrı tutulur, ilk PTF'in
-  açıklamasına karışmaz.
-
-Çıkarılan bilgiler: SYSMOD id/tipi, FMID, VER/RMID, PRE / REQ / SUP / DELETE,
-`++IF ... THEN REQ(...)` koşulları, düzeltilen APAR'lar, element listesi
-(MOD/SRC/MAC/ZAP/...) ve DISTLIB/RELFILE bilgileri, JCLIN varlığı, HOLD/RELEASE
-kayıtları ve açıklama metni.
-
-**PE (in error) tespiti:** `++HOLD(...) ERROR` kayıtları PTF'e bağlanır ve
-arayüzde kırmızı `PE - IN ERROR` rozetiyle gösterilir. HOLDDATA member'ındaki
-daha zengin bilgi (CLASS, RESOLVER, uzun açıklama) SMPPTFIN'deki aynı hold ile
-birleştirilir.
-
----
-
-## 10. Arayüz
-
-* **Summary** — paket başına statü, kullanılan decoder, encoding, parça listesi,
-  hata/uyarılar, paket başlığı metni.
-* **PTF list** — aranabilir/filtrelenebilir tablo (metin arama, FMID, sadece PE,
-  sadece HOLD'lu), CSV/JSON indirme.
-* **PTF detail** — açıklama, bağımlılıklar, APAR'lar, element tablosu, HOLD
-  tablosu, (Debug Mode'da) ham MCS statement'ları.
-* **HOLDDATA** — tüm HOLD/RELEASE kayıtları, ERROR hold'lar için uyarı.
-* **Package contents** — arşiv üyeleri, GIMFAF/GIMPAF tablosu, encoding aday
-  puanları (Debug Mode).
-* **Logs** — seviyeye göre filtrelenebilir yapısal log, CSV indirme.
-
-Tasarım düz kurumsal paletle yapılmıştır; **gradient kullanılmamıştır**.
-Masaüstü sürümü aynı paleti Qt stylesheet ile uygular (`desktop/theme.py`);
-PE (hatalı) PTF satırları tabloda kırmızı, HOLD'lu satırlar amber tonla işaretlenir.
-
-## 11. Bilinen sınırlar
-
-* `max_bits = 9` ile üretilmiş `.Z` akışları desteklenmez (gerçekte kullanılmayan
-  dejenere bir yapılandırma; `compress` kendisi de bu durumda tablo taşırır).
-  Gerçek paketler 12-16 bit kullanır.
-* TSO XMIT (`INMR01`) veri setleri tanınır ama açılmaz; z/OS tarafında önce
+- TSO XMIT (`INMR01`) akışları tanınır ancak açılmaz; veri seti önce z/OS üzerinde
   `RECEIVE` edilmelidir.
-* `cp037`/`cp500`/`cp1047` arasındaki fark yalnızca birkaç özel karakterde
-  olduğundan, SMP/E sözdizimi dışında ayırt edici karakter içermeyen
-  member'larda tespit edilen kod sayfası `cp037` olarak raporlanabilir —
-  çözülen metin aynıdır. Gerekirse arayüzden encoding zorlanabilir.
+- Unix `compress` formatındaki pratikte kullanılmayan `max_bits = 9` varyantı
+  desteklenmez. Gerçek servis paketleri genellikle 12–16 bit kullanır.
+- Ham MCS statement nesneleri geçmiş veritabanına kaydedilmez; kaydedilmiş bir
+  analiz yeniden açıldığında **Raw MCS** sekmesi boş olabilir.
+- Şifreli geçmiş için ayrıca SQLCipher uyumlu bir Python sürücüsü gerekir.
+- Güvenilir Windows yayınları için kurulu Windows SDK ve geçerli bir code-signing
+  sertifikası gerekir.
+
+## Katkıda bulunma
+
+Katkılar issue veya pull request üzerinden gönderilebilir. Bir değişiklik önerirken:
+
+1. Kapsamı ve beklenen davranışı açıkça açıklayın.
+2. Gerçek müşteri paketi, yerel yol, e-posta, IP, sertifika veya anahtar eklemeyin.
+3. Test verisi gerekiyorsa yalnızca sentetik ve yeniden dağıtılabilir veri kullanın.
+4. UI değişikliklerini hem açık hem koyu temada kontrol edin.
+5. Windows executable build'inin tamamlandığını doğrulayın.
+
+Güvenlik açığını herkese açık issue içinde gerçek paket veya hassas log paylaşarak
+bildirmeyin; repository sahibinin özel iletişim kanalını kullanın.
