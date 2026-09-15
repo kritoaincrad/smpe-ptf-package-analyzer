@@ -1,0 +1,9 @@
+# SMP/E PTF Package Analyzer
+# Desktop application dependencies
+pandas>=2.0
+PySide6>=6.6
+
+# --- optional --------------------------------------------------------------
+# A second pure-python .Z decoder for the fallback chain. The analyzer has its
+# own built-in decoder and works without this.
+unlzw3>=0.2.2
