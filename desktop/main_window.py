@@ -272,6 +272,9 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(
             action("&Preferences...", self.open_preferences, "Ctrl+,", "Decompression, encoding and history options")
         )
+        tools_menu.addAction(
+            action("Report &branding...", self.open_report_preferences, None, "Company name, report title and logo")
+        )
         tools_menu.addAction(action("Available &decoders...", self.show_decoders))
         tools_menu.addAction(action("Check for signed &updates...", self.check_updates))
 
@@ -309,7 +312,13 @@ class MainWindow(QMainWindow):
             self._build_summary_cards(self._report)
 
     def open_preferences(self) -> None:
-        updated = edit_settings(self.settings, self)
+        self._open_preferences_page()
+
+    def open_report_preferences(self) -> None:
+        self._open_preferences_page("Reports")
+
+    def _open_preferences_page(self, page: str = "") -> None:
+        updated = edit_settings(self.settings, self, page)
         if updated is None:
             return
         self.settings = updated
@@ -326,15 +335,110 @@ class MainWindow(QMainWindow):
         self.status_message.setText("Preferences saved.")
 
     def show_decoders(self) -> None:
-        lines = [
-            f"{'available' if decoder['available'] else 'not found':<12} {decoder['name']:<24} {decoder['path']}"
-            for decoder in available_decoders()
-        ]
-        box = QMessageBox(self)
-        box.setWindowTitle("Available decoders")
-        box.setText("Decoders are tried in this order until one succeeds:")
-        box.setInformativeText("\n".join(lines))
-        box.exec()
+        decoders = available_decoders()
+        dialog = QDialog(self)
+        dialog.setObjectName("DecoderDialog")
+        dialog.setWindowTitle("Available decoders")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(680)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 22, 24, 18)
+        layout.setSpacing(16)
+
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        icon = QLabel("Z")
+        icon.setObjectName("DecoderIcon")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setFixedSize(48, 48)
+        header.addWidget(icon)
+
+        heading = QVBoxLayout()
+        heading.setSpacing(2)
+        title = QLabel("Decompression decoders")
+        title.setObjectName("DecoderTitle")
+        subtitle = QLabel("Fallback chain for Unix .Z package streams")
+        subtitle.setObjectName("DecoderSubtitle")
+        heading.addWidget(title)
+        heading.addWidget(subtitle)
+        header.addLayout(heading, 1)
+
+        available_count = sum(1 for decoder in decoders if decoder["available"])
+        header.addWidget(Chip(f"{available_count} of {len(decoders)} available", theme.status_colour("SUCCESS")))
+        layout.addLayout(header)
+
+        explanation = QLabel(
+            "Decoders are evaluated in the order shown below. If one cannot open the stream, "
+            "the analyzer automatically continues with the next available option."
+        )
+        explanation.setObjectName("DecoderIntro")
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+
+        column_header = QFrame()
+        column_header.setObjectName("DecoderHeader")
+        column_layout = QHBoxLayout(column_header)
+        column_layout.setContentsMargins(12, 6, 12, 6)
+        column_layout.setSpacing(12)
+        order_header = QLabel("ORDER")
+        order_header.setFixedWidth(40)
+        decoder_header = QLabel("DECODER")
+        status_header = QLabel("STATUS")
+        status_header.setFixedWidth(92)
+        for label in (order_header, decoder_header, status_header):
+            label.setObjectName("DecoderColumnLabel")
+        column_layout.addWidget(order_header)
+        column_layout.addWidget(decoder_header, 1)
+        column_layout.addWidget(status_header)
+        layout.addWidget(column_header)
+
+        for index, decoder in enumerate(decoders, start=1):
+            row = QFrame()
+            row.setObjectName("DecoderRow")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(12, 10, 12, 10)
+            row_layout.setSpacing(12)
+
+            order = QLabel(f"{index:02d}")
+            order.setObjectName("DecoderOrder")
+            order.setAlignment(Qt.AlignCenter)
+            order.setFixedSize(40, 30)
+            row_layout.addWidget(order)
+
+            details = QVBoxLayout()
+            details.setSpacing(2)
+            name = QLabel(decoder["name"])
+            name.setObjectName("DecoderName")
+            source_text = str(decoder["path"]) if decoder["available"] else "Not installed on this system"
+            source = QLabel(source_text)
+            source.setObjectName("DecoderPath")
+            source.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            source.setWordWrap(True)
+            details.addWidget(name)
+            details.addWidget(source)
+            row_layout.addLayout(details, 1)
+
+            status_text = "Available" if decoder["available"] else "Not found"
+            status_key = "SUCCESS" if decoder["available"] else "DEBUG"
+            status = Chip(status_text, theme.status_colour(status_key))
+            status.setFixedWidth(92)
+            row_layout.addWidget(status)
+            layout.addWidget(row)
+
+        note = QLabel(
+            "The built-in LZW decoder is always available. Configure decoder selection and "
+            "large-file behavior in Tools > Preferences > Decompression."
+        )
+        note.setObjectName("DecoderNote")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.button(QDialogButtonBox.StandardButton.Close).setObjectName("Primary")
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def check_updates(self) -> None:
         if self.settings.offline_mode:

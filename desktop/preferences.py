@@ -10,12 +10,14 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -96,7 +98,7 @@ class Page(QWidget):
 class PreferencesDialog(QDialog):
     """Modal settings editor - nothing is applied until OK is pressed."""
 
-    def __init__(self, settings: Settings, parent=None):
+    def __init__(self, settings: Settings, parent=None, initial_page: str = ""):
         super().__init__(parent)
         self.setObjectName("PreferencesDialog")
         self.setWindowTitle("Preferences")
@@ -118,6 +120,7 @@ class PreferencesDialog(QDialog):
         self.pages = QStackedWidget()
         self.pages.setObjectName("PreferencePages")
 
+        category_titles = []
         for title, builder in (
             ("Appearance", self._build_appearance_page),
             ("Decompression", self._build_decompression_page),
@@ -127,10 +130,13 @@ class PreferencesDialog(QDialog):
             ("Security", self._build_security_page),
             ("Diagnostics", self._build_diagnostics_page),
         ):
+            category_titles.append(title)
             self.categories.addItem(QListWidgetItem(title))
             self.pages.addWidget(builder())
         self.categories.currentRowChanged.connect(self.pages.setCurrentIndex)
-        self.categories.setCurrentRow(0)
+        self.categories.setCurrentRow(
+            category_titles.index(initial_page) if initial_page in category_titles else 0
+        )
 
         body.addWidget(self.categories)
         body.addWidget(self.pages, 1)
@@ -267,13 +273,50 @@ class PreferencesDialog(QDialog):
         return page
 
     def _build_reports_page(self) -> QWidget:
-        page = Page("Corporate reports", "Branding applied to printable and PDF reports.")
-        self.company_name = page.add(QLineEdit(), "Company name", "Optional heading shown under the report title.")
-        self.report_title = page.add(QLineEdit(), "Report title", "Title used in printable reports and PDF exports.")
-        self.logo_path = page.add(QLineEdit(), "Logo file", "Optional local PNG/JPG/SVG path used in reports.")
+        page = Page("Corporate reports", "Branding used by PDF exports and printable reports.")
+        hint = QLabel(
+            "Set your identity here, save with OK, then create the report from "
+            "File > Corporate report (PDF) or Corporate report (Excel)."
+        )
+        hint.setObjectName("ReportHint")
+        hint.setWordWrap(True)
+        page._layout.addWidget(hint)
+
+        self.company_name = QLineEdit()
+        self.company_name.setPlaceholderText("Example: Company or business unit")
+        page.add(self.company_name, "Company name", "Optional name displayed below the report title.")
+
+        self.report_title = QLineEdit()
+        self.report_title.setPlaceholderText("SMP/E PTF Analysis Report")
+        page.add(self.report_title, "Report title", "Heading used in printable and PDF reports.")
+
+        logo_control = QWidget()
+        logo_layout = QHBoxLayout(logo_control)
+        logo_layout.setContentsMargins(0, 0, 0, 0)
+        logo_layout.setSpacing(6)
+        self.logo_path = QLineEdit()
+        self.logo_path.setPlaceholderText("No logo selected")
+        self.logo_path.setReadOnly(True)
+        browse_logo = QPushButton("Browse...")
+        browse_logo.clicked.connect(self._choose_logo)
+        clear_logo = QPushButton("Clear")
+        clear_logo.clicked.connect(self.logo_path.clear)
+        logo_layout.addWidget(self.logo_path, 1)
+        logo_layout.addWidget(browse_logo)
+        logo_layout.addWidget(clear_logo)
+        page.add(logo_control, "Company logo", "Optional PNG, JPG or SVG image used in PDF and print output.")
         self.mask_private_paths = page.add(QCheckBox(), "Mask private paths in exports", "Replaces user, network and home paths plus e-mail/IP values in corporate reports and logs.")
         page.finish()
         return page
+
+    def _choose_logo(self) -> None:
+        start = self.logo_path.text() or self._settings.logo_path
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select company logo", start,
+            "Image files (*.png *.jpg *.jpeg *.svg);;All files (*)",
+        )
+        if path:
+            self.logo_path.setText(path)
 
     def _build_security_page(self) -> QWidget:
         page = Page("Security", "Controls that reduce accidental data disclosure.")
@@ -356,9 +399,9 @@ class PreferencesDialog(QDialog):
         )
 
 
-def edit_settings(settings: Settings, parent=None) -> Optional[Settings]:
+def edit_settings(settings: Settings, parent=None, initial_page: str = "") -> Optional[Settings]:
     """Show the dialog; returns the new settings or ``None`` if cancelled."""
-    dialog = PreferencesDialog(settings, parent)
+    dialog = PreferencesDialog(settings, parent, initial_page)
     if dialog.exec() == QDialog.Accepted:
         return dialog.result_settings()
     return None

@@ -166,7 +166,7 @@ QCheckBox::indicator {{ width: 18px; height: 18px; }}
 QRadioButton::indicator {{ width: 16px; height: 16px; }}
 
 /* ---- preferences and about ------------------------------------------ */
-QDialog#PreferencesDialog, QDialog#AboutDialog {{ background: {SURFACE}; }}
+QDialog#PreferencesDialog, QDialog#AboutDialog, QDialog#DecoderDialog {{ background: {SURFACE}; }}
 QListWidget#PreferenceCategories {{
     background: {SURFACE_ALT};
     border: none;
@@ -194,6 +194,19 @@ QLabel#SecurityNote {{
     color: {MUTED}; background: {SURFACE_ALT}; border: 1px solid {LINE};
     border-radius: 3px; padding: 9px 11px;
 }}
+QLabel#ReportHint, QLabel#DecoderIntro, QLabel#DecoderNote {{
+    color: {MUTED}; background: {SURFACE_ALT}; border: 1px solid {LINE};
+    border-left: 3px solid {INFO}; border-radius: 3px; padding: 9px 11px;
+}}
+QFrame#DecoderHeader {{ background: {SURFACE_ALT}; border-bottom: 1px solid {LINE}; }}
+QLabel#DecoderColumnLabel {{ color: {MUTED}; background: transparent; font-size: 8pt; font-weight: 600; letter-spacing: 1px; }}
+QFrame#DecoderRow {{ background: {SURFACE}; border: 1px solid {LINE}; border-radius: 4px; }}
+QFrame#DecoderRow:hover {{ background: {SURFACE_ALT}; border-color: {BRAND}; }}
+QLabel#DecoderIcon {{ color: #FFFFFF; background: {BRAND}; border-radius: 4px; font-size: 20pt; font-weight: 700; }}
+QLabel#DecoderTitle {{ color: {INK}; font-size: 13pt; font-weight: 600; background: transparent; }}
+QLabel#DecoderSubtitle, QLabel#DecoderPath {{ color: {MUTED}; background: transparent; }}
+QLabel#DecoderName {{ color: {INK}; font-weight: 600; background: transparent; }}
+QLabel#DecoderOrder {{ color: {BRAND}; background: {SURFACE_ALT}; border-radius: 3px; font-weight: 700; }}
 QLabel#AboutIcon {{
     color: #FFFFFF; background: {BRAND}; border-radius: 4px;
     font-size: 27pt; font-weight: 700;
@@ -379,13 +392,19 @@ QLabel#SectionTitle, QLabel#ValueLabel, QLabel#MetricValue, QLabel#AboutTitle, Q
 QLabel#CardTitle, QLabel#KeyLabel, QLabel#MetricLabel, QLabel#MetricNote,
 QLabel#SettingNote, QLabel#AboutVersion {{ color: {DARK_MUTED}; }}
 QTextEdit#Description {{ color: {DARK_INK}; background: {DARK_SURFACE_ALT}; border-color: {DARK_LINE}; border-left-color: {DARK_INFO}; }}
-QDialog#PreferencesDialog, QDialog#AboutDialog {{ background: {DARK_SURFACE}; }}
+QDialog#PreferencesDialog, QDialog#AboutDialog, QDialog#DecoderDialog {{ background: {DARK_SURFACE}; }}
 QListWidget#PreferenceCategories, QFrame#DialogFooter {{ background: {DARK_SURFACE_ALT}; border-color: {DARK_LINE}; }}
 QListWidget#PreferenceCategories::item {{ color: {DARK_MUTED}; }}
 QListWidget#PreferenceCategories::item:hover {{ color: #FFFFFF; background: {DARK_HOVER}; }}
 QListWidget#PreferenceCategories::item:selected {{ color: #FFFFFF; background: {DARK_SURFACE}; border-left-color: {DARK_INFO}; }}
 QStackedWidget#PreferencePages {{ background: {DARK_SURFACE}; }}
-QLabel#SecurityNote, QLabel#AboutMeta {{ color: {DARK_MUTED}; background: {DARK_SURFACE_ALT}; border-color: {DARK_LINE}; }}
+QLabel#SecurityNote, QLabel#AboutMeta, QLabel#ReportHint, QLabel#DecoderIntro, QLabel#DecoderNote {{ color: {DARK_MUTED}; background: {DARK_SURFACE_ALT}; border-color: {DARK_LINE}; border-left-color: {DARK_INFO}; }}
+QFrame#DecoderHeader {{ background: {DARK_SURFACE_ALT}; border-bottom-color: {DARK_LINE}; }}
+QLabel#DecoderColumnLabel, QLabel#DecoderSubtitle, QLabel#DecoderPath {{ color: {DARK_MUTED}; }}
+QFrame#DecoderRow {{ background: {DARK_SURFACE}; border-color: {DARK_LINE}; }}
+QFrame#DecoderRow:hover {{ background: {DARK_HOVER}; border-color: {DARK_INFO}; }}
+QLabel#DecoderTitle, QLabel#DecoderName {{ color: {DARK_INK}; }}
+QLabel#DecoderOrder {{ color: {DARK_INFO}; background: {DARK_SURFACE_ALT}; }}
 QDialogButtonBox {{ background: transparent; }}
 QMessageBox QLabel {{ color: {DARK_INK}; background: transparent; }}
 """

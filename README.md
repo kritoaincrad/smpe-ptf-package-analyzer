@@ -1,303 +1,331 @@
 # SMP/E PTF Package Analyzer
 
+[![Windows build](https://github.com/kritoaincrad/smpe-ptf-package-analyzer/actions/workflows/windows-build.yml/badge.svg)](https://github.com/kritoaincrad/smpe-ptf-package-analyzer/actions/workflows/windows-build.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![PySide6](https://img.shields.io/badge/UI-PySide6%20%2F%20Qt-41CD52?logo=qt&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)
-![Version](https://img.shields.io/badge/Version-2.0.0-0B3D62)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-IBM z/OS için hazırlanmış, yerel çalışan bir SMP/E servis paketi analiz uygulaması.
-BMC ve IBM tarzı `.pax.Z`, Unix `.Z` ve bölünmüş `.XofY` teslimatlarını birleştirir,
-paket içeriğini güvenli biçimde açar ve SMP/E metadatasını masaüstü arayüzünde
-incelenebilir hale getirir.
+A native desktop application for inspecting IBM z/OS SMP/E service packages.
+It joins split deliveries, safely decompresses and inspects package contents,
+extracts PTF and HOLD metadata, compares releases, and produces corporate reports.
 
-Uygulama PySide6/Qt tabanlıdır. Analiz işlemleri kullanıcının bilgisayarında yapılır;
-web sunucusu veya tarayıcı gerektirmez.
+The analyzer is built with Python and PySide6/Qt. Package processing takes place
+locally on the workstation; no browser or application server is required.
 
 > [!IMPORTANT]
-> Bu proje IBM veya BMC tarafından geliştirilmiş ya da desteklenen resmî bir ürün
-> değildir. Ürün ve marka adları yalnızca desteklenen paket biçimlerini açıklamak
-> amacıyla kullanılmıştır.
+> This is an independent project and is not developed, endorsed, or supported by
+> IBM or BMC. Product names are used only to describe compatible package formats.
 
-## Öne çıkan özellikler
+## Highlights
 
-- `.XofY` parçalarını algılama, numerik sıralama ve eksik/çakışan parça kontrolü
-- Unix `.Z` için dahili LZW decoder ve yapılandırılabilir fallback zinciri
-- PAX, TAR, GZIP ve iç içe GIMZIP tarzı arşivleri inceleme
-- SMPPTFIN, SMPMCS, HOLDDATA, GIMFAF ve GIMPAF metadata analizi
-- PTF, APAR, FMID, PRE, REQ, SUP, element, HOLD ve açıklama çıkarımı
-- Kritik `ERROR HOLD` kayıtlarından PE (PTF in error) tespiti
-- Arama, sıralama, sütun seçimi ve yeniden kullanılabilir filtre profilleri
-- Açık/koyu tema ve tüm analiz boyunca yanıt veren yerel masaüstü arayüzü
-- Analiz geçmişi, not/etiket/arşivleme ve SHA-256 tabanlı tekrar teslimat tespiti
-- İki teslimat arasında eklenen, kaldırılan ve değişen PTF karşılaştırması
-- CSV, JSON, Excel ve PDF dışa aktarma; yazdırılabilir PTF detayları
-- Yönetici özeti, kritik HOLD ve aksiyon bölümleri içeren kurumsal raporlar
-- Firma adı, rapor başlığı ve logo ile rapor özelleştirme
-- Rapor ve loglarda yerel yol, e-posta ve IP adresi maskeleme
-- İsteğe bağlı SQLCipher veritabanı şifrelemesi
-- Çevrimdışı analiz modu ve imzalı güncelleme manifesti desteği
-- Windows bildirimleri, veritabanı yedekleme ve doğrulanmış geri yükleme
+- Detects, validates, numerically sorts, and joins split `.XofY` deliveries
+- Decompresses Unix `.Z` streams with a built-in LZW decoder and fallback chain
+- Reads PAX, TAR, GZIP, and nested GIMZIP-style package structures
+- Parses SMPPTFIN, SMPMCS, HOLDDATA, GIMFAF, and GIMPAF metadata
+- Extracts PTFs, APARs, FMIDs, dependencies, elements, descriptions, and HOLDs
+- Identifies PE (PTF in error) status from critical `ERROR HOLD` records
+- Provides search, sorting, configurable columns, and reusable filter profiles
+- Includes polished light and dark themes for the complete desktop interface
+- Stores analysis history with labels, notes, archive state, and SHA-256 fingerprints
+- Compares two deliveries at added, removed, and changed PTF level
+- Exports CSV, JSON, multi-sheet Excel, printable PDF, and individual PTF reports
+- Generates executive summaries with PE, critical HOLD, and action-required sections
+- Supports company name, report title, and logo customization
+- Masks local paths, network paths, email addresses, and IP addresses in exports
+- Offers optional SQLCipher database encryption and enforced offline analysis
+- Supports signed update manifests, Windows notifications, and database backup/restore
 
-## Uygulama akışı
+## How it works
 
 ```mermaid
 flowchart LR
-    A[Dosyaları seç veya sürükle] --> B[Parçaları doğrula]
-    B --> C[SHA-256 ve paket gruplama]
-    C --> D[Birleştir ve aç]
-    D --> E[Arşiv üyelerini sınıflandır]
-    E --> F[SMP/E metadatasını ayrıştır]
-    F --> G[PTF ve HOLD envanteri]
-    G --> H[Karşılaştırma ve raporlama]
+    A[Select or drop files] --> B[Validate parts]
+    B --> C[Hash and group packages]
+    C --> D[Join and decompress]
+    D --> E[Classify archive members]
+    E --> F[Parse SMP/E metadata]
+    F --> G[Build PTF and HOLD inventory]
+    G --> H[Compare and report]
 ```
 
-Analiz ayrı bir worker thread üzerinde çalışır. Uzun süren açma ve ayrıştırma
-işlemleri sırasında arayüz kullanılabilir kalır; aşama, yüzde, geçen süre ve canlı
-log bilgisi gösterilir. İşlem gerektiğinde iptal edilebilir.
+Analysis runs on a background worker thread. The interface remains responsive
+during large decompression and parsing jobs while displaying the current stage,
+percentage, elapsed time, and live structured logs. An active analysis can be
+cancelled safely.
 
-## Gereksinimler
+## Requirements
 
-- Windows 10 veya Windows 11
-- Python 3.11 veya üzeri
-- Bağımlılıkları kurmak için `pip`
+- Windows 10 or Windows 11
+- Python 3.11 or later
+- `pip` for dependency installation
 
-Temel bağımlılıklar `requirements.txt` içinde tutulur:
+Core dependencies are defined in [`requirements.txt`](requirements.txt):
 
-- `PySide6`: yerel Qt arayüzü
-- `pandas`: tablo ve rapor verisi
-- `openpyxl`: Excel çıktısı
-- `cryptography`: imzalı güncelleme doğrulaması
-- `unlzw3`: isteğe bağlı ikinci `.Z` decoder
+| Package | Purpose |
+|---|---|
+| `PySide6` | Native Qt desktop interface |
+| `pandas` | Tabular analysis and export data |
+| `openpyxl` | Excel report generation |
+| `cryptography` | Ed25519 update-manifest verification |
+| `unlzw3` | Optional secondary Unix `.Z` decoder |
 
-Uygulamanın kendi LZW decoder'ı bulunduğu için `unlzw3` veya 7-Zip olmadan da
-Unix `.Z` dosyaları işlenebilir.
+The application includes its own LZW decoder, so Unix `.Z` packages can be
+processed without `unlzw3` or 7-Zip.
 
-## Kurulum
+## Quick start
 
-Depoyu GitHub'daki **Code** düğmesiyle klonlayın veya ZIP olarak indirin. Ardından
-proje klasöründe bir sanal ortam oluşturun:
+Clone the repository and create an isolated environment:
 
 ```powershell
+git clone https://github.com/kritoaincrad/smpe-ptf-package-analyzer.git
+cd smpe-ptf-package-analyzer
+
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Uygulamayı başlatın:
+Launch the desktop application:
 
 ```powershell
 python desktop_app.py
 ```
 
-Dosyalar arayüze sürüklenebilir veya **File > Add files / Add folder** üzerinden
-seçilebilir. İstenirse tam dosya yolları başlangıçta argüman olarak verilebilir:
+Files can be dropped onto the application or selected through **File > Add files**
+and **File > Add folder**. Exact file paths may also be passed at startup:
 
 ```powershell
 python desktop_app.py "C:\Packages\delivery.1of3" "C:\Packages\delivery.2of3" "C:\Packages\delivery.3of3"
 ```
 
-## Desteklenen teslimat yapıları
+## Supported delivery structures
 
-| Yapı | Örnek | Davranış |
+| Structure | Example | Behavior |
 |---|---|---|
-| Tek parça | `delivery.pax.Z` | Doğrudan algılanır ve analiz edilir |
-| Bölünmüş paket | `delivery.1of3` ... `delivery.3of3` | Numerik sırayla birleştirilir |
-| Büyük/küçük harf varyasyonu | `.01OF07`, `_3of4`, `-1 of 2` | Parça numarası ve toplam sayı algılanır |
-| PAX/TAR | `.pax`, `.tar` | Arşiv doğrudan okunur |
-| GZIP | `.gz` | Format algılanarak açılır |
-| İç içe paket | GIMZIP tarzı arşiv | Ayarlanan derinliğe kadar taranır |
-| TSO XMIT | `INMR01` imzalı akış | Tanınır, ancak açılmaz |
+| Single package | `delivery.pax.Z` | Detected and processed directly |
+| Split package | `delivery.1of3` ... `delivery.3of3` | Joined in numeric order |
+| Naming variants | `.01OF07`, `_3of4`, `-1 of 2` | Part number and total are recognized |
+| PAX/TAR | `.pax`, `.tar` | Archive is read directly |
+| GZIP | `.gz` | Format is detected and decompressed |
+| Nested package | GIMZIP-style archive | Traversed up to the configured depth |
+| TSO XMIT | `INMR01` stream | Recognized but not unpacked |
 
-Parça doğrulaması analiz başlamadan önce yapılır. Eksik parça, aynı sıra numarasıyla
-farklı içerik, tutarsız toplam parça sayısı ve yinelenen teslimatlar açık durum
-mesajlarıyla gösterilir.
+Part validation occurs before analysis begins. Missing parts, conflicting content
+for the same part number, inconsistent totals, and duplicate deliveries are shown
+as clear status messages.
 
-## Analiz ekranları
+## Desktop interface
 
-| Ekran | İçerik |
+| View | Purpose |
 |---|---|
-| **Summary** | Paket durumu, format, decoder, encoding, boyut ve uyarılar |
-| **PTFs** | Aranabilir PTF listesi, FMID/PE/HOLD filtreleri ve detay görünümü |
-| **HOLDDATA** | HOLD ve RELEASE kayıtları; kritik ERROR HOLD vurguları |
-| **Package contents** | Arşiv üyeleri, roller ve GIMFAF/GIMPAF metadatası |
-| **Logs** | Seviyeye göre filtrelenebilen yapılandırılmış analiz logları |
-| **History** | Kaydedilmiş analizler, notlar, etiketler ve arşiv durumu |
-| **Compare** | İki analiz arasındaki PTF farkları |
-| **Inventory** | PTF/FMID görünürlüğü ve yinelenen paket fingerprint'leri |
+| **Summary** | Package status, format, decoder, encoding, size, and warnings |
+| **PTFs** | Searchable PTF table with FMID, PE, and HOLD filters plus detail pane |
+| **HOLDDATA** | HOLD and RELEASE records with critical ERROR HOLD highlighting |
+| **Package contents** | Archive members, roles, and GIMFAF/GIMPAF metadata |
+| **Logs** | Structured logs filterable by severity |
+| **History** | Stored analyses, labels, notes, and archive state |
+| **Compare** | PTF-level differences between two analyses |
+| **Inventory** | PTF/FMID visibility and repeated package fingerprints |
 
-## Raporlama
+Additional workflow features include:
 
-Uygulama aşağıdaki çıktıları üretebilir:
+- Explorer drag and drop with optional recursive folder discovery
+- Recently used input and export directories
+- Persistent column visibility and reusable PTF filter profiles
+- Native completion notifications when the application is in the background
+- Dark mode with complete hover, focus, selected, and disabled states
+- A decoder diagnostics window showing availability and fallback priority
 
-- Filtrelenebilir PTF listesi için CSV
-- Tam analiz kaydı için JSON
-- Yapılandırılmış loglar için CSV
-- Birden fazla çalışma sayfasına sahip Excel raporu
-- Yazdırılabilir kurumsal PDF raporu
-- Seçilen PTF için baskı önizlemesi
+## Reporting
 
-Excel ve PDF raporlarında yönetici özeti, paket/PTF sayaçları, PE kayıtları,
-kritik HOLD'lar ve karşılaştırma sonuçları bulunabilir. Firma adı, başlık ve logo
-**Tools > Preferences > Reports** bölümünden ayarlanır.
+The application can produce:
 
-## Geçmiş ve yerel veri
+- CSV exports of the filtered PTF list
+- JSON exports of the complete analysis record
+- CSV exports of structured analysis logs
+- Multi-sheet, filterable Excel workbooks
+- Printable corporate PDF reports
+- Print previews for individual PTF details
 
-Analiz geçmişi varsayılan olarak yerel bir SQLite veritabanında saklanır:
+Corporate reports may include an executive summary, package and PTF totals,
+in-error PTFs, critical HOLDs, required actions, and delivery comparison results.
+
+Configure the company name, report title, and logo through:
+
+```text
+Tools > Report branding...
+```
+
+The same settings are available under **Tools > Preferences > Reports**. After an
+analysis completes, reports can be created through **File > Corporate report**.
+
+## Analysis history and inventory
+
+Analysis history is stored in a local SQLite database by default:
 
 ```text
 %LOCALAPPDATA%\PTFAnalyzer\analyses.db
 ```
 
-Konum `PTFANALYZER_DB` ortam değişkeniyle değiştirilebilir. Veritabanı;
-analiz özetlerini, paket fingerprint'lerini, aranabilir PTF indeksini ve raporun
-yeniden açılması için gerekli kayıtları içerir. Ham ve büyük geçici arşiv verileri
-saklanmaz.
+Set `PTFANALYZER_DB` to use a different location. The database contains analysis
+summaries, package fingerprints, a searchable PTF index, and the records required
+to reopen an analysis. Large temporary archive data and raw workspace files are
+not persisted.
 
-History ekranından:
+The History and Inventory views can:
 
-- analizler yeniden adlandırılabilir, notlandırılabilir ve arşivlenebilir,
-- bir PTF'nin ilk ve son görüldüğü teslimatlar bulunabilir,
-- yinelenen paket fingerprint'leri görüntülenebilir,
-- veritabanı yedeklenebilir ve bütünlük kontrolünden sonra geri yüklenebilir.
+- Rename, annotate, archive, and reopen analyses
+- Find the first and last delivery in which a PTF appeared
+- Detect packages uploaded more than once by SHA-256 fingerprint
+- Browse inventory by PTF and FMID
+- Back up the database and restore it after an integrity check
 
-## Güvenlik ve gizlilik
+Raw MCS statement objects are intentionally excluded from stored analyses because
+they are large and reproducible. As a result, **Raw MCS** may be empty when an old
+analysis is reopened.
 
-- Paketler yerel olarak işlenir; varsayılan analiz modu çevrimdışıdır.
-- Çevrimdışı koruma analiz süresince outbound socket bağlantılarını engeller.
-- Arşiv traversal girişimleri, aşırı member sayısı ve çok büyük member'lar reddedilir.
-- Geçici çalışma dosyaları analiz workspace'i kapatılırken temizlenir.
-- Rapor ve log maskelemesi Windows/UNC/home yollarını, e-postaları ve IPv4
-  adreslerini anonimleştirebilir.
-- Güncelleme kontrolü yalnızca yapılandırılmış HTTPS manifestini ve geçerli
-  Ed25519 imzasını kabul eder.
-- Sertifika, veritabanı anahtarı ve benzeri sırlar repoya kaydedilmez.
+## Security and privacy
+
+- Packages are processed locally; offline analysis is enabled by default.
+- The offline guard blocks outbound socket connections while analysis is running.
+- Archive traversal attempts, excessive member counts, oversized members, and
+  abnormal expansion ratios are rejected.
+- Temporary workspace files are removed when processing ends.
+- Export redaction can mask Windows, UNC, and home-directory paths, email addresses,
+  and IPv4 addresses.
+- Update checks accept only a configured HTTPS manifest with a valid Ed25519 signature.
+- Database keys, signing certificates, and passwords are never stored in the repository.
 
 > [!WARNING]
-> Paket analizi güvenilmeyen verilerin ayrıştırılmasını içerir. Limitleri kapatmadan
-> önce kaynağın güvenilir olduğundan emin olun ve büyük teslimatları yeterli boş disk
-> alanına sahip bir sistemde çalıştırın.
+> Package analysis involves parsing untrusted input. Keep the safety limits enabled,
+> verify the source of each delivery, and ensure sufficient free disk space before
+> processing very large packages.
 
-### Opsiyonel veritabanı şifrelemesi
+### Optional database encryption
 
-SQLCipher uyumlu bir Python sürücüsü (`sqlcipher3` veya `pysqlcipher3`) kurun,
-ardından anahtarı yalnızca çalışma ortamına verin:
+Install a SQLCipher-compatible Python driver such as `sqlcipher3` or `pysqlcipher3`,
+then provide the key through the process environment:
 
 ```powershell
 $env:PTFANALYZER_DB_KEY = "your-strong-secret"
 python desktop_app.py
 ```
 
-Son olarak **Preferences > Security > Encrypt history database with SQLCipher**
-seçeneğini etkinleştirin ve uygulamayı yeniden başlatın. Anahtar QSettings'e veya
-veritabanına yazılmaz.
+Enable **Preferences > Security > Encrypt history database with SQLCipher** and
+restart the application. The key is not written to QSettings or the database.
 
-## Yapılandırma değişkenleri
+## Environment variables
 
-| Değişken | Amaç |
+| Variable | Purpose |
 |---|---|
-| `PTFANALYZER_DB` | SQLite/SQLCipher veritabanı yolunu değiştirir |
-| `PTFANALYZER_DB_KEY` | SQLCipher geçmiş veritabanı anahtarı |
-| `PTFANALYZER_UPDATE_MANIFEST_URL` | İmzalı güncelleme manifestinin HTTPS adresi |
-| `PTFANALYZER_UPDATE_PUBLIC_KEY` | Base64 kodlu Ed25519 public key |
-| `SIGN_PFX_PATH` | Yerel Windows build'i için PFX sertifika yolu |
-| `SIGN_PFX_PASSWORD` | PFX sertifika parolası |
+| `PTFANALYZER_DB` | Overrides the SQLite/SQLCipher database path |
+| `PTFANALYZER_DB_KEY` | Supplies the SQLCipher history database key |
+| `PTFANALYZER_UPDATE_MANIFEST_URL` | HTTPS URL of the signed update manifest |
+| `PTFANALYZER_UPDATE_PUBLIC_KEY` | Base64-encoded Ed25519 public key |
+| `SIGN_PFX_PATH` | PFX certificate path for a local Windows build |
+| `SIGN_PFX_PASSWORD` | Password for the PFX certificate |
 
-## Windows executable oluşturma
+## Building the Windows executable
 
-PyInstaller'ı kurun ve build betiğini çalıştırın:
+Install PyInstaller and run the build script:
 
 ```powershell
 python -m pip install -r requirements.txt pyinstaller
 .\scripts\build_windows.ps1 -Version "2.0.0"
 ```
 
-Çıktı:
+The executable is written to:
 
 ```text
 dist\PTF-Analyzer-2.0.0.exe
 ```
 
-Betik build sonunda SHA-256 değerini yazdırır. `SIGN_PFX_PATH` ve
-`SIGN_PFX_PASSWORD` tanımlıysa Windows SDK içindeki `signtool.exe` kullanılarak
-binary SHA-256 ve güvenilir timestamp ile imzalanır; imza daha sonra doğrulanır.
+The script prints the final SHA-256 hash. When `SIGN_PFX_PATH` and
+`SIGN_PFX_PASSWORD` are set, it signs the executable with SHA-256 and a trusted
+timestamp through Windows SDK `signtool.exe`, then verifies the signature.
 
-### GitHub Actions ile build
+### GitHub Actions
 
-`.github/workflows/windows-build.yml` workflow'u **Actions > Windows desktop
-build > Run workflow** üzerinden sürüm numarası verilerek manuel çalıştırılabilir.
-Üretilen `.exe` workflow artifact'i olarak yüklenir.
+The [Windows desktop build workflow](.github/workflows/windows-build.yml) can be
+started manually from **Actions > Windows desktop build > Run workflow**. The
+requested version is built and uploaded as a workflow artifact.
 
-İmzalı artifact için repository secrets bölümüne aşağıdaki değerleri ekleyin:
+For a signed artifact, configure these repository secrets:
 
-| Secret | İçerik |
+| Secret | Content |
 |---|---|
-| `SIGN_PFX_BASE64` | PFX dosyasının Base64 içeriği |
-| `SIGN_PFX_PASSWORD` | PFX parolası |
+| `SIGN_PFX_BASE64` | Base64 representation of the PFX file |
+| `SIGN_PFX_PASSWORD` | PFX certificate password |
 
-Bu secrets tanımlı değilse build tamamlanır ancak executable imzasız olur.
+The workflow still produces an executable when these secrets are absent, but the
+artifact will be unsigned.
 
-## Mimari
+## Architecture
 
-Analiz motoru Qt'den bağımsızdır; masaüstü katmanı yalnızca motorun modellerini ve
-olaylarını görüntüler.
+The analysis engine has no Qt dependency. The desktop layer consumes its models
+and progress events without coupling package parsing to the interface.
 
 ```text
 desktop_app.py
-├── desktop/                 PySide6 masaüstü uygulaması
-│   ├── main_window.py       Ana pencere ve kullanıcı akışları
-│   ├── models.py            Qt tablo/proxy modelleri
-│   ├── widgets.py           Yeniden kullanılabilir bileşenler
-│   ├── preferences.py       Kategorili ayarlar penceresi
-│   ├── theme.py             Açık/koyu tema ve etkileşim durumları
-│   └── worker.py            Arka plan analiz işleri
-├── ptfanalyzer/             UI'dan bağımsız analiz motoru
-│   ├── parts.py             Parça algılama, doğrulama ve SHA-256
-│   ├── compression.py       Format tespiti ve .Z decoder zinciri
-│   ├── archive.py           Güvenli PAX/TAR ve nested arşiv işleme
-│   ├── records.py           Fixed-record ayrıştırma
-│   ├── mcs.py / smpe.py     SMP/E statement ve SYSMOD analizi
-│   ├── database.py          Geçmiş ve envanter
-│   ├── reporting.py         Excel/PDF raporlama
-│   └── security.py          Maskeleme ve çevrimdışı koruma
+├── desktop/                 PySide6 desktop application
+│   ├── main_window.py       Main window and user workflows
+│   ├── models.py            Qt table and proxy models
+│   ├── widgets.py           Reusable interface components
+│   ├── preferences.py       Categorized application settings
+│   ├── theme.py             Light/dark theme and interaction states
+│   └── worker.py            Background analysis workers
+├── ptfanalyzer/             UI-independent analysis engine
+│   ├── parts.py             Part discovery, validation, and SHA-256
+│   ├── compression.py       Format detection and .Z decoder chain
+│   ├── archive.py           Safe PAX/TAR and nested archive handling
+│   ├── records.py           Fixed-record processing
+│   ├── mcs.py / smpe.py     SMP/E statement and SYSMOD analysis
+│   ├── database.py          History and inventory persistence
+│   ├── reporting.py         Excel and printable PDF reporting
+│   └── security.py          Redaction and offline enforcement
 └── scripts/
-    └── build_windows.ps1    Windows executable üretimi ve imzalama
+    └── build_windows.ps1    Windows packaging and code signing
 ```
 
-## Decoder sırası
+## Decoder fallback order
 
-Unix `.Z` akışları için decoder'lar ilk başarılı sonuç alınana kadar denenir:
+Unix `.Z` decoders are attempted until one succeeds:
 
-1. `unlzw3` (kuruluysa)
-2. Dahili saf Python LZW decoder
-3. 7-Zip (`7z`, `7za` veya `7zz`)
-4. Sistem `uncompress`, `gzip` veya `zcat` araçları
+1. `unlzw3`, when installed
+2. Built-in pure-Python LZW decoder
+3. 7-Zip (`7z`, `7za`, or `7zz`)
+4. System `uncompress`, `gzip`, or `zcat`
 
-Bir decoder başarısız olduğunda hata loglanır ve sıradaki seçenek denenir. Tüm
-seçenekler başarısız olursa kullanıcıya eksik parça, hatalı sıra veya ASCII FTP
-aktarımı gibi muhtemel nedenleri içeren anlaşılır bir hata gösterilir.
+If a decoder fails, the error is recorded and the next available option is tried.
+When every decoder fails, the application presents likely causes such as a missing
+part, incorrect ordering, truncation, or an ASCII-mode FTP transfer.
 
-## Bilinen sınırlamalar
+## Known limitations
 
-- TSO XMIT (`INMR01`) akışları tanınır ancak açılmaz; veri seti önce z/OS üzerinde
-  `RECEIVE` edilmelidir.
-- Unix `compress` formatındaki pratikte kullanılmayan `max_bits = 9` varyantı
-  desteklenmez. Gerçek servis paketleri genellikle 12–16 bit kullanır.
-- Ham MCS statement nesneleri geçmiş veritabanına kaydedilmez; kaydedilmiş bir
-  analiz yeniden açıldığında **Raw MCS** sekmesi boş olabilir.
-- Şifreli geçmiş için ayrıca SQLCipher uyumlu bir Python sürücüsü gerekir.
-- Güvenilir Windows yayınları için kurulu Windows SDK ve geçerli bir code-signing
-  sertifikası gerekir.
+- TSO XMIT (`INMR01`) streams are identified but not unpacked. The data set must be
+  processed with `RECEIVE` on z/OS first.
+- The rarely used Unix `compress` configuration with `max_bits = 9` is unsupported.
+  Real service packages generally use 12–16 bits.
+- Raw MCS statement objects are not stored in analysis history.
+- Encrypted history requires a separate SQLCipher-compatible Python driver.
+- Trusted Windows releases require Windows SDK and a valid code-signing certificate.
 
-## Katkıda bulunma
+## Contributing
 
-Katkılar issue veya pull request üzerinden gönderilebilir. Bir değişiklik önerirken:
+Issues and pull requests are welcome. When contributing:
 
-1. Kapsamı ve beklenen davranışı açıkça açıklayın.
-2. Gerçek müşteri paketi, yerel yol, e-posta, IP, sertifika veya anahtar eklemeyin.
-3. Test verisi gerekiyorsa yalnızca sentetik ve yeniden dağıtılabilir veri kullanın.
-4. UI değişikliklerini hem açık hem koyu temada kontrol edin.
-5. Windows executable build'inin tamamlandığını doğrulayın.
+1. Describe the scope and expected behavior clearly.
+2. Never commit customer packages, private paths, email addresses, IP addresses,
+   certificates, passwords, or encryption keys.
+3. Use only synthetic, redistributable fixtures when sample data is required.
+4. Verify interface changes in both light and dark mode.
+5. Confirm that the Windows executable build completes successfully.
 
-Güvenlik açığını herkese açık issue içinde gerçek paket veya hassas log paylaşarak
-bildirmeyin; repository sahibinin özel iletişim kanalını kullanın.
+Do not disclose sensitive package data or logs in a public security issue. Use the
+repository owner's private contact channel for responsible disclosure.
+
+## License
+
+Distributed under the [MIT License](LICENSE).
