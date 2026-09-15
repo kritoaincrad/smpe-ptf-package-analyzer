@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QSpinBox,
@@ -43,6 +44,7 @@ class Setting(QWidget):
 
         if isinstance(control, QCheckBox):
             control.setText(title)
+            control.setObjectName("PreferenceCheckBox")
             layout.addWidget(control)
         else:
             row = QHBoxLayout()
@@ -54,9 +56,9 @@ class Setting(QWidget):
             layout.addLayout(row)
 
         note = QLabel(description)
-        note.setObjectName("KeyLabel")
+        note.setObjectName("SettingNote")
         note.setWordWrap(True)
-        note.setContentsMargins(20 if isinstance(control, QCheckBox) else 0, 0, 0, 0)
+        note.setContentsMargins(30 if isinstance(control, QCheckBox) else 0, 0, 0, 0)
         layout.addWidget(note)
 
 
@@ -79,8 +81,8 @@ class Page(QWidget):
             self._layout.addWidget(note)
 
         line = QFrame()
+        line.setObjectName("Divider")
         line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet(f"color: {theme.LINE};")
         self._layout.addWidget(line)
 
     def add(self, control: QWidget, title: str, description: str) -> QWidget:
@@ -96,6 +98,7 @@ class PreferencesDialog(QDialog):
 
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
+        self.setObjectName("PreferencesDialog")
         self.setWindowTitle("Preferences")
         self.setMinimumSize(760, 520)
         self._settings = settings.copy()
@@ -109,23 +112,19 @@ class PreferencesDialog(QDialog):
         body.setSpacing(0)
 
         self.categories = QListWidget()
-        self.categories.setFixedWidth(190)
+        self.categories.setObjectName("PreferenceCategories")
+        self.categories.setFixedWidth(184)
         self.categories.setFrameShape(QFrame.NoFrame)
-        self.categories.setStyleSheet(
-            f"QListWidget {{ background: {theme.SURFACE_ALT};"
-            f"border-right: 1px solid {theme.LINE}; outline: none; }}"
-            "QListWidget::item { padding: 10px 14px; border-left: 3px solid transparent; }"
-            f"QListWidget::item:hover {{ background: {theme.SURFACE}; }}"
-            f"QListWidget::item:selected, QListWidget::item:selected:!active {{"
-            f"background: {theme.SURFACE}; color: {theme.BRAND};"
-            f"border-left: 3px solid {theme.BRAND}; font-weight: 600; }}"
-        )
         self.pages = QStackedWidget()
+        self.pages.setObjectName("PreferencePages")
 
         for title, builder in (
+            ("Appearance", self._build_appearance_page),
             ("Decompression", self._build_decompression_page),
             ("SMP/E metadata", self._build_metadata_page),
             ("History", self._build_history_page),
+            ("Reports", self._build_reports_page),
+            ("Security", self._build_security_page),
             ("Diagnostics", self._build_diagnostics_page),
         ):
             self.categories.addItem(QListWidgetItem(title))
@@ -138,7 +137,7 @@ class PreferencesDialog(QDialog):
         layout.addLayout(body, 1)
 
         footer = QFrame()
-        footer.setStyleSheet(f"background: {theme.SURFACE_ALT}; border-top: 1px solid {theme.LINE};")
+        footer.setObjectName("DialogFooter")
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(16, 10, 16, 10)
         buttons = QDialogButtonBox(
@@ -149,10 +148,7 @@ class PreferencesDialog(QDialog):
         buttons.button(QDialogButtonBox.RestoreDefaults).clicked.connect(self._restore_defaults)
         ok_button = buttons.button(QDialogButtonBox.Ok)
         ok_button.setDefault(True)
-        ok_button.setStyleSheet(
-            f"background: {theme.BRAND}; color: #FFFFFF; border: 1px solid {theme.BRAND};"
-            "border-radius: 3px; padding: 6px 22px; font-weight: 600;"
-        )
+        ok_button.setObjectName("Primary")
         footer_layout.addStretch(1)
         footer_layout.addWidget(buttons)
         layout.addWidget(footer)
@@ -160,6 +156,14 @@ class PreferencesDialog(QDialog):
         self._load(self._settings)
 
     # -- pages -----------------------------------------------------------
+    def _build_appearance_page(self) -> QWidget:
+        page = Page("Appearance and workflow", "Desktop display and file-selection behaviour.")
+        self.dark_theme = page.add(QCheckBox(), "Dark theme", "Applied immediately after saving preferences.")
+        self.notifications = page.add(QCheckBox(), "Notify when analysis finishes", "Shows a native desktop notification when the application is in the background.")
+        self.recursive_folders = page.add(QCheckBox(), "Include subfolders when a folder is dropped", "Find package parts recursively and skip duplicate paths.")
+        page.finish()
+        return page
+
     def _build_decompression_page(self) -> QWidget:
         page = Page(
             "Decompression",
@@ -262,6 +266,26 @@ class PreferencesDialog(QDialog):
         page.finish()
         return page
 
+    def _build_reports_page(self) -> QWidget:
+        page = Page("Corporate reports", "Branding applied to printable and PDF reports.")
+        self.company_name = page.add(QLineEdit(), "Company name", "Optional heading shown under the report title.")
+        self.report_title = page.add(QLineEdit(), "Report title", "Title used in printable reports and PDF exports.")
+        self.logo_path = page.add(QLineEdit(), "Logo file", "Optional local PNG/JPG/SVG path used in reports.")
+        self.mask_private_paths = page.add(QCheckBox(), "Mask private paths in exports", "Replaces user, network and home paths plus e-mail/IP values in corporate reports and logs.")
+        page.finish()
+        return page
+
+    def _build_security_page(self) -> QWidget:
+        page = Page("Security", "Controls that reduce accidental data disclosure.")
+        self.offline_mode = page.add(QCheckBox(), "Enforce offline analysis", "Blocks outbound socket connections for the duration of every analysis.")
+        self.encrypt_database = page.add(QCheckBox(), "Encrypt history database with SQLCipher", "Requires a SQLCipher Python driver and the PTFANALYZER_DB_KEY environment variable. Restart after changing.")
+        note = QLabel("The database key is never stored in application settings. Windows signing needs an organization-managed certificate.")
+        note.setObjectName("SecurityNote")
+        note.setWordWrap(True)
+        page._layout.addWidget(note)
+        page.finish()
+        return page
+
     @staticmethod
     def _spin(minimum: int, maximum: int, step: int, suffix: str) -> QSpinBox:
         spin = QSpinBox()
@@ -289,6 +313,15 @@ class PreferencesDialog(QDialog):
         self.analyze_duplicates.setChecked(settings.analyze_duplicates)
         self.auto_save.setChecked(settings.auto_save)
         self.history_limit.setValue(settings.history_limit)
+        self.dark_theme.setChecked(settings.dark_theme)
+        self.notifications.setChecked(settings.notifications)
+        self.recursive_folders.setChecked(settings.recursive_folders)
+        self.company_name.setText(settings.company_name)
+        self.report_title.setText(settings.report_title)
+        self.logo_path.setText(settings.logo_path)
+        self.mask_private_paths.setChecked(settings.mask_private_paths)
+        self.offline_mode.setChecked(settings.offline_mode)
+        self.encrypt_database.setChecked(settings.encrypt_database)
         self.debug.setChecked(settings.debug)
 
     def _restore_defaults(self) -> None:
@@ -308,6 +341,17 @@ class PreferencesDialog(QDialog):
             analyze_duplicates=self.analyze_duplicates.isChecked(),
             auto_save=self.auto_save.isChecked(),
             history_limit=self.history_limit.value(),
+            dark_theme=self.dark_theme.isChecked(),
+            notifications=self.notifications.isChecked(),
+            recursive_folders=self.recursive_folders.isChecked(),
+            last_input_dir=self._settings.last_input_dir,
+            last_export_dir=self._settings.last_export_dir,
+            company_name=self.company_name.text().strip(),
+            report_title=self.report_title.text().strip() or "SMP/E PTF Analysis Report",
+            logo_path=self.logo_path.text().strip(),
+            mask_private_paths=self.mask_private_paths.isChecked(),
+            offline_mode=self.offline_mode.isChecked(),
+            encrypt_database=self.encrypt_database.isChecked(),
             debug=self.debug.isChecked(),
         )
 

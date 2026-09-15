@@ -497,6 +497,8 @@ class DecompressOptions:
     prefer_external_for_large: bool = True
     external_threshold_mb: int = 96
     only: Optional[str] = None  # force one decoder (debugging)
+    max_output_bytes: int = 16 * 1024 * 1024 * 1024
+    max_expansion_ratio: int = 2000
 
 
 def _decoder_unlzw3(
@@ -612,6 +614,12 @@ def decompress_stream(
                 "decompress", f"Decompressing with '{name}'", float(source_size)
             )
             written, truncated = func(source, destination, options, log, progress)
+            allowed = min(options.max_output_bytes, max(source_size * options.max_expansion_ratio, 256 * 1024 * 1024))
+            if written > allowed:
+                raise DecompressionError(
+                    "Decompressed output exceeded the configured safety limit.",
+                    detail=f"output={written:,} bytes, limit={allowed:,} bytes",
+                )
             progress.update(source_size, source_size, f"Decompressed {written:,} bytes")
             if written == 0:
                 raise DecompressionError("The decoder produced no output.")

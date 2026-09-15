@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional, Sequence
 
-from PySide6.QtCore import QModelIndex, Qt, Signal
+from PySide6.QtCore import QModelIndex, QSettings, Qt, Signal
 from PySide6.QtGui import QAction, QFont, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -43,7 +43,7 @@ class Chip(QLabel):
 
     def set_status(self, status: str) -> None:
         self.setText(status)
-        self.set_colour(theme.STATUS_COLOURS.get(status, theme.MUTED))
+        self.set_colour(theme.status_colour(status))
         self.setVisible(bool(status))
 
 
@@ -160,6 +160,8 @@ class DataTable(QTableView):
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
         self.setAlternatingRowColors(True)
         self.setSortingEnabled(True)
         self.setWordWrap(False)
@@ -177,6 +179,7 @@ class DataTable(QTableView):
     def setModel(self, model):  # noqa: N802 - Qt API
         super().setModel(model)
         self._apply_column_sizing()
+        self._restore_columns()
 
     def _apply_column_sizing(self, max_width: int = 190) -> None:
         """Size columns to their content, capped, with one column stretching.
@@ -206,7 +209,49 @@ class DataTable(QTableView):
         menu = QMenu(self)
         menu.addAction("Copy", self.copy_selection)
         menu.addAction("Select all", self.selectAll)
+        model = self.model()
+        if model is not None:
+            columns = menu.addMenu("Columns")
+            for column in range(model.columnCount()):
+                name = str(model.headerData(column, Qt.Horizontal, Qt.DisplayRole))
+                item = columns.addAction(name)
+                item.setCheckable(True)
+                item.setChecked(not self.isColumnHidden(column))
+                item.toggled.connect(lambda visible, index=column: self._set_column_visible(index, visible))
+            columns.addSeparator()
+            columns.addAction("Show all", self._show_all_columns)
         menu.exec(self.viewport().mapToGlobal(position))
+
+    def _settings_key(self) -> str:
+        return f"tables/{self.objectName() or self._stretch_column or 'table'}/hidden_columns"
+
+    def _set_column_visible(self, column: int, visible: bool) -> None:
+        self.setColumnHidden(column, not visible)
+        self._save_columns()
+
+    def _show_all_columns(self) -> None:
+        if self.model() is None:
+            return
+        for column in range(self.model().columnCount()):
+            self.setColumnHidden(column, False)
+        self._save_columns()
+
+    def _save_columns(self) -> None:
+        model = self.model()
+        if model is None:
+            return
+        hidden = [str(model.headerData(i, Qt.Horizontal, Qt.DisplayRole)) for i in range(model.columnCount()) if self.isColumnHidden(i)]
+        QSettings().setValue(self._settings_key(), hidden)
+
+    def _restore_columns(self) -> None:
+        model = self.model()
+        if model is None:
+            return
+        raw = QSettings().value(self._settings_key(), [])
+        hidden = {str(raw)} if isinstance(raw, str) else {str(item) for item in (raw or [])}
+        for column in range(model.columnCount()):
+            name = str(model.headerData(column, Qt.Horizontal, Qt.DisplayRole))
+            self.setColumnHidden(column, name in hidden)
 
     def copy_selection(self) -> None:
         indexes: list[QModelIndex] = self.selectedIndexes()
@@ -243,10 +288,10 @@ class PTFDetailPanel(QWidget):
         header.setSpacing(8)
         self._title = QLabel("-")
         self._title.setObjectName("SectionTitle")
-        self._type_chip = Chip("", theme.INFO)
-        self._pe_chip = Chip("", theme.ERR)
-        self._hold_chip = Chip("", theme.WARN)
-        self._jclin_chip = Chip("", theme.MUTED)
+        self._type_chip = Chip("", theme.status_colour("INFO"))
+        self._pe_chip = Chip("", theme.status_colour("ERROR"))
+        self._hold_chip = Chip("", theme.status_colour("WARNING"))
+        self._jclin_chip = Chip("", theme.status_colour("DEBUG"))
         header.addWidget(self._title)
         header.addSpacing(6)
         for chip in (self._type_chip, self._pe_chip, self._hold_chip, self._jclin_chip):
@@ -295,6 +340,10 @@ class PTFDetailPanel(QWidget):
         self._raw.setPlainText("")
 
     def show_ptf(self, ptf: PTFEntry, raw_statements: Sequence[str] = ()) -> None:
+        self._type_chip.set_colour(theme.status_colour("INFO"))
+        self._pe_chip.set_colour(theme.status_colour("ERROR"))
+        self._hold_chip.set_colour(theme.status_colour("WARNING"))
+        self._jclin_chip.set_colour(theme.status_colour("DEBUG"))
         self._title.setText(ptf.sysmod_id)
 
         self._type_chip.setText(ptf.sysmod_type)

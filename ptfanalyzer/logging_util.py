@@ -12,6 +12,8 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Literal
 
+from .security import redact_sensitive
+
 Level = Literal["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"]
 
 _ORDER: dict[str, int] = {"DEBUG": 10, "INFO": 20, "SUCCESS": 20, "WARNING": 30, "ERROR": 40}
@@ -52,16 +54,18 @@ class AnalysisLog:
         scope: str = "",
         entries: list[LogEntry] | None = None,
         listener: Callable[[LogEntry], None] | None = None,
+        redact: bool = True,
     ):
         self._scope = scope
         self._entries: list[LogEntry] = entries if entries is not None else []
         self._listener = listener
+        self._redact = redact
 
     # -- construction ----------------------------------------------------
     def child(self, scope: str) -> "AnalysisLog":
         """Return a log that shares storage but prefixes a different scope."""
         new_scope = f"{self._scope}/{scope}" if self._scope else scope
-        return AnalysisLog(new_scope, self._entries, self._listener)
+        return AnalysisLog(new_scope, self._entries, self._listener, self._redact)
 
     def set_listener(self, listener: Callable[[LogEntry], None] | None) -> None:
         """Install (or remove) the live listener for this log and its children."""
@@ -74,6 +78,10 @@ class AnalysisLog:
             tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
             if detail is None:
                 detail = f"{type(exc).__name__}: {exc}"
+        if self._redact:
+            message = redact_sensitive(message)
+            detail = redact_sensitive(detail) if detail is not None else None
+            tb = redact_sensitive(tb) if tb is not None else None
         entry = LogEntry(level=level, message=message, scope=self._scope, detail=detail, traceback_text=tb)
         self._entries.append(entry)
         if self._listener is not None:

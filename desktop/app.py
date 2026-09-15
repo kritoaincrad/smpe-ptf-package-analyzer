@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from . import theme
 from .main_window import MainWindow
+from .settings import Settings
 
 
 def build_application(argv=None) -> QApplication:
@@ -19,8 +20,8 @@ def build_application(argv=None) -> QApplication:
     application = existing or QApplication(list(argv or sys.argv))
     application.setApplicationName("SMP/E PTF Package Analyzer")
     application.setOrganizationName("SMP/E Tools")
-    application.setStyle("Fusion")
-    application.setStyleSheet(theme.STYLESHEET)
+    application.setStyle(theme.ProfessionalStyle("Fusion"))
+    theme.apply(application, Settings.load().dark_theme)
     application.setFont(QFont("Segoe UI", 9))
     application.setWindowIcon(_icon())
     return application

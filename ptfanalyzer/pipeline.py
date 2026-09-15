@@ -45,6 +45,8 @@ class AnalyzerOptions:
     max_nested_depth: int = 2
     analyze_duplicates: bool = False
     debug: bool = False
+    offline_mode: bool = True
+    redact_logs: bool = True
 
     def decompress_options(self) -> DecompressOptions:
         return DecompressOptions(

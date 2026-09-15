@@ -28,3 +28,7 @@ report.json
 .idea/
 .vscode/
 *.code-workspace
+build/
+dist/
+*.spec
+*.pfx

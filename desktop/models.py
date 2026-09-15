@@ -60,9 +60,11 @@ class RowTableModel(QAbstractTableModel):
             if tint:
                 return QColor(tint)
         if role == Qt.ForegroundRole and column in ("Status", "Hold Type", "level"):
-            colour = theme.STATUS_COLOURS.get(str(value)) or theme.LEVEL_COLOURS.get(str(value))
+            colour = theme.status_colour(str(value))
             if colour:
                 return QColor(colour)
+        if role == Qt.ForegroundRole and theme.is_dark():
+            return QColor(theme.text_colour())
         return None
 
     # -- helpers ---------------------------------------------------------
@@ -144,9 +146,9 @@ class PTFTableModel(RowTableModel):
 
     def row_tint(self, row: dict) -> Optional[str]:
         if row.get("PE") == "YES":
-            return theme.PE_ROW
+            return theme.row_colour("pe")
         if row.get("HOLD") not in ("-", "", None):
-            return theme.WARN_ROW
+            return theme.row_colour("warn")
         return None
 
 

@@ -16,14 +16,21 @@ Layout::
 
 from __future__ import annotations
 
+import html
+import json
+import os
 from pathlib import Path
 from typing import Optional, Sequence
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QFont, QKeySequence
+from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtGui import QAction, QFont, QKeySequence, QTextDocument
+from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -38,6 +45,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QTabWidget,
+    QSystemTrayIcon,
     QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
@@ -47,6 +55,7 @@ from PySide6.QtWidgets import (
 
 from ptfanalyzer import __version__
 from ptfanalyzer.compression import available_decoders
+from ptfanalyzer.compare import compare_reports, comparison_summary
 from ptfanalyzer.database import AnalysisStore, default_database_path
 from ptfanalyzer.encoding import CANDIDATE_ENCODINGS
 from ptfanalyzer.export import (
@@ -62,6 +71,8 @@ from ptfanalyzer.export import (
 from ptfanalyzer.models import AnalysisReport, PackageAnalysis, PackageGroup, PartRef, PTFEntry
 from ptfanalyzer.pipeline import AnalyzerOptions, Workspace
 from ptfanalyzer.progress import ProgressEvent
+from ptfanalyzer.reporting import printable_html, write_excel_report
+from ptfanalyzer.security import redact_sensitive
 
 from . import theme
 from .models import PTFFilterProxy, PTFTableModel, RowTableModel
@@ -69,6 +80,7 @@ from .preferences import edit_settings
 from .settings import Settings
 from .widgets import Card, Chip, DataTable, FileDropList, KeyValueGrid, MetricCard, PTFDetailPanel, StatusItem, list_item
 from .worker import AnalysisRunner, start_scan
+from .updater import check_for_update
 
 LOG_LEVELS = ["ERROR", "WARNING", "SUCCESS", "INFO", "DEBUG"]
 
@@ -108,11 +120,15 @@ class MainWindow(QMainWindow):
         self._workspace: Optional[Workspace] = None
         self._log_rows: list[dict] = []
         self._loaded_id: Optional[int] = None
+        self._comparison_rows: list[dict] = []
         self.settings = Settings.load()
         self._store: Optional[AnalysisStore] = None
         self._store_error = ""
         try:
-            self._store = AnalysisStore()
+            encryption_key = os.environ.get("PTFANALYZER_DB_KEY", "") if self.settings.encrypt_database else ""
+            if self.settings.encrypt_database and not encryption_key:
+                raise RuntimeError("Database encryption is enabled but PTFANALYZER_DB_KEY is not set.")
+            self._store = AnalysisStore(encryption_key=encryption_key)
         except Exception as exc:  # noqa: BLE001 - history is a convenience
             self._store_error = f"{type(exc).__name__}: {exc}"
 
@@ -190,9 +206,15 @@ class MainWindow(QMainWindow):
             "Export full report (&JSON)...", self.export_json, None, "Save the complete report"
         )
         self.action_export_log = action("Save &log (CSV)...", self.export_log)
+        self.action_export_excel = action("Corporate report (&Excel)...", self.export_excel)
+        self.action_export_pdf = action("Corporate report (&PDF)...", self.export_pdf)
+        self.action_print_ptf = action("&Print selected PTF...", self.print_selected_ptf, "Ctrl+P")
         file_menu.addAction(self.action_export_csv)
         file_menu.addAction(self.action_export_json)
         file_menu.addAction(self.action_export_log)
+        file_menu.addAction(self.action_export_excel)
+        file_menu.addAction(self.action_export_pdf)
+        file_menu.addAction(self.action_print_ptf)
         file_menu.addSeparator()
         file_menu.addAction(action("E&xit", self.close, "Ctrl+Q"))
 
@@ -214,7 +236,7 @@ class MainWindow(QMainWindow):
         history_menu.addAction(
             action(
                 "Show &history",
-                lambda: self.tabs.setCurrentIndex(self.tabs.count() - 1),
+                lambda: self.tabs.setCurrentIndex(5),
                 "Ctrl+H",
                 "Stored analyses you can reopen",
             )
@@ -227,12 +249,14 @@ class MainWindow(QMainWindow):
             "Store this analysis in the local database",
         )
         history_menu.addAction(self.action_save_now)
+        history_menu.addAction(action("&Backup database...", self.backup_database))
+        history_menu.addAction(action("&Restore database...", self.restore_database))
         history_menu.addAction(action("&Open database folder", self.open_database_folder))
 
         # -- View ---------------------------------------------------------
         view_menu = bar.addMenu("&View")
         for position, name in enumerate(
-            ["Summary", "PTFs", "HOLDDATA", "Package contents", "Logs", "History"]
+            ["Summary", "PTFs", "HOLDDATA", "Package contents", "Logs", "History", "Compare", "Inventory"]
         ):
             view_menu.addAction(
                 action(f"&{position + 1}  {name}", lambda _=False, i=position: self.tabs.setCurrentIndex(i),
@@ -249,12 +273,14 @@ class MainWindow(QMainWindow):
             action("&Preferences...", self.open_preferences, "Ctrl+,", "Decompression, encoding and history options")
         )
         tools_menu.addAction(action("Available &decoders...", self.show_decoders))
+        tools_menu.addAction(action("Check for signed &updates...", self.check_updates))
 
         # -- Help ---------------------------------------------------------
         help_menu = bar.addMenu("&Help")
         help_menu.addAction(action("&About", self.show_about))
 
         for item in (self.action_export_csv, self.action_export_json, self.action_export_log,
+                     self.action_export_excel, self.action_export_pdf, self.action_print_ptf,
                      self.action_save_now):
             item.setEnabled(False)
 
@@ -288,9 +314,15 @@ class MainWindow(QMainWindow):
             return
         self.settings = updated
         self.settings.save()
+        theme.apply(QApplication.instance(), self.settings.dark_theme)
         self.action_debug.setChecked(self.settings.debug)
+        self.hold_banner.setStyleSheet(theme.chip_style(theme.status_colour("ERROR")))
         self._refresh_logs()
         self.refresh_history()
+        if self._report is not None:
+            self._populate(self._report)
+        if self._groups:
+            self._on_scan_finished(self._scan_token, self._parts, self._groups)
         self.status_message.setText("Preferences saved.")
 
     def show_decoders(self) -> None:
@@ -304,15 +336,81 @@ class MainWindow(QMainWindow):
         box.setInformativeText("\n".join(lines))
         box.exec()
 
+    def check_updates(self) -> None:
+        if self.settings.offline_mode:
+            QMessageBox.information(self, "Updates", "Offline mode is enabled. Disable it temporarily to contact the configured signed update channel.")
+            return
+        try:
+            update = check_for_update(__version__)
+        except Exception as exc:
+            QMessageBox.warning(self, "Updates", f"The signed update channel could not be checked.\n\n{exc}")
+            return
+        if update is None:
+            QMessageBox.information(self, "Updates", "This is the latest available version.")
+            return
+        answer = QMessageBox.question(self, "Signed update available", f"Version {update.version} is available.\n\n{update.notes}\n\nOpen the verified HTTPS download page?", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(update.url))
+
     def show_about(self) -> None:
-        QMessageBox.about(
-            self,
-            "About",
-            f"<b>SMP/E PTF Package Analyzer</b> {__version__}<br><br>"
-            "Joins split <code>.XofY</code> parts, decompresses Unix <code>.Z</code>, reads "
-            "SMPPTFIN / HOLDDATA / GIMFAF metadata and lists every PTF with its description."
-            f"<br><br>History database:<br><code>{default_database_path()}</code>",
+        dialog = QDialog(self)
+        dialog.setObjectName("AboutDialog")
+        dialog.setWindowTitle("About")
+        dialog.setModal(True)
+        dialog.setFixedWidth(570)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 22, 24, 18)
+        layout.setSpacing(16)
+
+        header = QHBoxLayout()
+        header.setSpacing(16)
+        icon = QLabel("Z")
+        icon.setObjectName("AboutIcon")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setFixedSize(64, 64)
+        header.addWidget(icon)
+
+        identity = QVBoxLayout()
+        identity.setSpacing(3)
+        title = QLabel("SMP/E PTF Package Analyzer")
+        title.setObjectName("AboutTitle")
+        version = QLabel(f"Desktop edition  ·  Version {__version__}")
+        version.setObjectName("AboutVersion")
+        identity.addStretch(1)
+        identity.addWidget(title)
+        identity.addWidget(version)
+        identity.addStretch(1)
+        header.addLayout(identity, 1)
+        layout.addLayout(header)
+
+        divider = QFrame()
+        divider.setObjectName("Divider")
+        divider.setFrameShape(QFrame.HLine)
+        layout.addWidget(divider)
+
+        body = QLabel(
+            "A local desktop tool for joining split .XofY packages, decompressing Unix .Z streams, "
+            "and analysing SMPPTFIN, HOLDDATA and GIMFAF metadata."
         )
+        body.setObjectName("AboutBody")
+        body.setWordWrap(True)
+        layout.addWidget(body)
+
+        meta = QLabel(
+            "LOCAL PROCESSING  ·  OFFLINE BY DEFAULT\n"
+            f"History: {redact_sensitive(default_database_path())}"
+        )
+        meta.setObjectName("AboutMeta")
+        meta.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(meta)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def open_database_folder(self) -> None:
         from PySide6.QtGui import QDesktopServices
@@ -320,6 +418,34 @@ class MainWindow(QMainWindow):
 
         folder = (self._store.path if self._store else default_database_path()).parent
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def backup_database(self) -> None:
+        if self._store is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Backup history database", str(Path(self.settings.last_export_dir) / "ptf_history_backup.db"), "SQLite database (*.db)")
+        if path:
+            self._store.backup_to(Path(path))
+            self.settings.last_export_dir = str(Path(path).parent)
+            self.settings.save()
+            self.status_message.setText("History database backup completed.")
+
+    def restore_database(self) -> None:
+        if self._store is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Restore history database", self.settings.last_export_dir, "SQLite database (*.db);;All files (*)")
+        if not path:
+            return
+        answer = QMessageBox.question(self, "Restore database", "Replace the current history with this verified backup? A safety backup will be created first.", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        safety = self._store.path.with_name(self._store.path.stem + ".before_restore.db")
+        try:
+            self._store.backup_to(safety)
+            self._store.restore_from(Path(path))
+            self.refresh_history()
+            self.status_message.setText(f"Database restored. Safety backup: {safety}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Restore database", f"Restore failed; the current database was kept.\n\n{exc}")
 
     def save_current_analysis(self) -> None:
         """Store the analysis on screen even when auto-save is switched off."""
@@ -409,6 +535,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_contents_tab(), "Package contents")
         self.tabs.addTab(self._build_log_tab(), "Logs")
         self.tabs.addTab(self._build_history_tab(), "History")
+        self.tabs.addTab(self._build_comparison_tab(), "Compare")
+        self.tabs.addTab(self._build_inventory_tab(), "Inventory")
         return self.tabs
 
     # -- tabs ------------------------------------------------------------
@@ -463,11 +591,22 @@ class MainWindow(QMainWindow):
         self.fmid_combo.setMinimumWidth(150)
         self.only_pe = QCheckBox("Only PE")
         self.only_hold = QCheckBox("Only with HOLD")
+        self.filter_profile = QComboBox()
+        self.filter_profile.setMinimumWidth(130)
+        self.filter_profile.addItem("Filter profiles...")
+        self._load_filter_profiles()
+        save_profile = QPushButton("Save profile")
+        save_profile.clicked.connect(self.save_filter_profile)
+        delete_profile = QPushButton("Delete profile")
+        delete_profile.clicked.connect(self.delete_filter_profile)
         filters.addWidget(self.search_box, 1)
         filters.addWidget(QLabel("FMID:"))
         filters.addWidget(self.fmid_combo)
         filters.addWidget(self.only_pe)
         filters.addWidget(self.only_hold)
+        filters.addWidget(self.filter_profile)
+        filters.addWidget(save_profile)
+        filters.addWidget(delete_profile)
         self.ptf_count_label = QLabel("0 PTF")
         self.ptf_count_label.setObjectName("KeyLabel")
         filters.addWidget(self.ptf_count_label)
@@ -475,6 +614,7 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Horizontal)
         self.ptf_table = DataTable("Description")
+        self.ptf_table.setObjectName("ptf_table")
         self.ptf_model = PTFTableModel()
         self.ptf_proxy = PTFFilterProxy(self)
         self.ptf_proxy.setSourceModel(self.ptf_model)
@@ -495,6 +635,7 @@ class MainWindow(QMainWindow):
         self.fmid_combo.currentTextChanged.connect(self._apply_ptf_filters)
         self.only_pe.toggled.connect(self._apply_ptf_filters)
         self.only_hold.toggled.connect(self._apply_ptf_filters)
+        self.filter_profile.currentIndexChanged.connect(self.apply_filter_profile)
         return page
 
     def _build_hold_tab(self) -> QWidget:
@@ -503,10 +644,11 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         self.hold_banner = QLabel("")
-        self.hold_banner.setStyleSheet(theme.chip_style(theme.ERR))
+        self.hold_banner.setStyleSheet(theme.chip_style(theme.status_colour("ERROR")))
         self.hold_banner.hide()
         layout.addWidget(self.hold_banner)
         self.hold_table = DataTable("Comment")
+        self.hold_table.setObjectName("hold_table")
         self.hold_table.setModel(RowTableModel([], ["PTF", "Hold Type", "Reason", "FMID", "Date", "Class", "Resolver", "Comment", "Source"]))
         layout.addWidget(self.hold_table, 1)
         return page
@@ -528,6 +670,7 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Vertical)
         self.member_table = DataTable("Member")
+        self.member_table.setObjectName("member_table")
         self.member_table.setModel(RowTableModel([], ["Member", "Role", "Size (bytes)", "Type", "Container"]))
         gimfaf_card = QWidget()
         gimfaf_layout = QVBoxLayout(gimfaf_card)
@@ -565,6 +708,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(controls)
 
         self.log_table = DataTable("message")
+        self.log_table.setObjectName("log_table")
         self.log_table.setModel(RowTableModel([], ["time", "level", "scope", "message"]))
         self.log_table.setSortingEnabled(False)
         self.log_table.clicked.connect(self._show_log_detail)
@@ -597,6 +741,10 @@ class MainWindow(QMainWindow):
         self.history_open_button.clicked.connect(self.open_selected_history)
         self.history_rename_button = QPushButton("Rename")
         self.history_rename_button.clicked.connect(self.rename_selected_history)
+        self.history_note_button = QPushButton("Notes")
+        self.history_note_button.clicked.connect(self.note_selected_history)
+        self.history_archive_button = QPushButton("Archive")
+        self.history_archive_button.clicked.connect(self.archive_selected_history)
         self.history_delete_button = QPushButton("Delete")
         self.history_delete_button.clicked.connect(self.delete_selected_history)
         refresh_button = QPushButton("Refresh")
@@ -604,6 +752,8 @@ class MainWindow(QMainWindow):
         for button in (
             self.history_open_button,
             self.history_rename_button,
+            self.history_note_button,
+            self.history_archive_button,
             self.history_delete_button,
             refresh_button,
         ):
@@ -619,10 +769,11 @@ class MainWindow(QMainWindow):
         history_title = QLabel("STORED ANALYSES")
         history_title.setObjectName("CardTitle")
         self.history_table = DataTable("Label")
+        self.history_table.setObjectName("history_table")
         self.history_table.setModel(
             RowTableModel(
                 [],
-                ["ID", "Date", "Label", "Packages", "PTFs", "HOLDs", "Errors", "Duration (s)", "Sources"],
+                ["ID", "Date", "Label", "Archived", "Notes", "Packages", "PTFs", "HOLDs", "Errors", "Duration (s)", "Sources"],
             )
         )
         self.history_table.doubleClicked.connect(lambda _: self.open_selected_history())
@@ -641,6 +792,7 @@ class MainWindow(QMainWindow):
         self.ptf_history_search.setClearButtonEnabled(True)
         self.ptf_history_search.textChanged.connect(self.search_history_ptfs)
         self.history_ptf_table = DataTable("Description")
+        self.history_ptf_table.setObjectName("history_ptf_table")
         self.history_ptf_table.setModel(
             RowTableModel(
                 [],
@@ -658,6 +810,54 @@ class MainWindow(QMainWindow):
         self.history_status = QLabel("")
         self.history_status.setObjectName("KeyLabel")
         layout.addWidget(self.history_status)
+        return page
+
+    def _build_comparison_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Before:"))
+        self.compare_before = QComboBox()
+        controls.addWidget(self.compare_before, 1)
+        controls.addWidget(QLabel("After:"))
+        self.compare_after = QComboBox()
+        controls.addWidget(self.compare_after, 1)
+        run = QPushButton("Compare")
+        run.setObjectName("Primary")
+        run.clicked.connect(self.run_comparison)
+        controls.addWidget(run)
+        layout.addLayout(controls)
+        self.compare_summary = QLabel("Select two stored analyses.")
+        self.compare_summary.setObjectName("KeyLabel")
+        layout.addWidget(self.compare_summary)
+        self.compare_table = DataTable("Description")
+        self.compare_table.setObjectName("comparison")
+        self.compare_table.setModel(RowTableModel([], ["Status", "PTF", "FMID", "PE", "Changed fields", "Description"]))
+        layout.addWidget(self.compare_table, 1)
+        return page
+
+    def _build_inventory_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        controls = QHBoxLayout()
+        self.inventory_search = QLineEdit()
+        self.inventory_search.setPlaceholderText("Filter by PTF, FMID or description...")
+        self.inventory_search.setClearButtonEnabled(True)
+        self.inventory_search.textChanged.connect(self.refresh_inventory)
+        controls.addWidget(self.inventory_search, 1)
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self.refresh_inventory)
+        controls.addWidget(refresh)
+        layout.addLayout(controls)
+        self.inventory_table = DataTable()
+        self.inventory_table.setObjectName("inventory")
+        self.inventory_table.setModel(RowTableModel([], ["PTF", "Type", "FMID", "Seen", "First seen", "Last seen", "Ever PE"]))
+        layout.addWidget(self.inventory_table, 1)
+        self.duplicate_label = QLabel("")
+        self.duplicate_label.setObjectName("KeyLabel")
+        layout.addWidget(self.duplicate_label)
         return page
 
     # -- options dock ----------------------------------------------------
@@ -683,17 +883,22 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Select package files (.pax.Z, .Z or .XofY parts)",
-            "",
+            self.settings.last_input_dir,
             "All files (*)",
         )
         if paths:
+            self.settings.last_input_dir = str(Path(paths[0]).parent)
+            self.settings.save()
             self.add_paths(paths)
 
     def add_folder_dialog(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Select the folder holding the package parts")
+        directory = QFileDialog.getExistingDirectory(self, "Select the folder holding the package parts", self.settings.last_input_dir)
         if not directory:
             return
-        files = sorted(path for path in Path(directory).iterdir() if path.is_file())
+        self.settings.last_input_dir = directory
+        self.settings.save()
+        iterator = Path(directory).rglob("*") if self.settings.recursive_folders else Path(directory).iterdir()
+        files = sorted(path for path in iterator if path.is_file())
         if not files:
             QMessageBox.information(self, "Empty folder", "No files were found in that folder.")
             return
@@ -704,7 +909,8 @@ class MainWindow(QMainWindow):
         for raw in paths:
             path = Path(raw)
             if path.is_dir():
-                for child in sorted(path.iterdir()):
+                iterator = path.rglob("*") if self.settings.recursive_folders else path.iterdir()
+                for child in sorted(iterator):
                     if child.is_file() and child not in self._paths:
                         self._paths.append(child)
                         added += 1
@@ -745,6 +951,9 @@ class MainWindow(QMainWindow):
             self.action_export_csv,
             self.action_export_json,
             self.action_export_log,
+            self.action_export_excel,
+            self.action_export_pdf,
+            self.action_print_ptf,
             self.action_save_now,
         ):
             item.setEnabled(False)
@@ -782,7 +991,7 @@ class MainWindow(QMainWindow):
         self.package_tree.clear()
         for group in groups:
             item = QTreeWidgetItem([group.display_name, group.status])
-            colour = theme.STATUS_COLOURS.get(group.status)
+            colour = theme.status_colour(group.status)
             if colour:
                 from PySide6.QtGui import QBrush, QColor
 
@@ -880,6 +1089,11 @@ class MainWindow(QMainWindow):
             f"{len(report.analyzed_packages)} package(s), {len(report.ptfs)} PTF(s)"
             + (f", {errors} error(s)" if errors else "")
         )
+        if self.settings.notifications and QSystemTrayIcon.isSystemTrayAvailable():
+            if not hasattr(self, "_tray"):
+                self._tray = QSystemTrayIcon(self.windowIcon(), self)
+                self._tray.show()
+            self._tray.showMessage("PTF analysis complete", f"{len(report.analyzed_packages)} package(s), {len(report.ptfs)} PTF(s), {errors} error(s)", QSystemTrayIcon.Information, 8000)
 
     def _on_saved(self, analysis_id: int) -> None:
         self._loaded_id = analysis_id
@@ -958,6 +1172,9 @@ class MainWindow(QMainWindow):
         self.action_export_csv.setEnabled(bool(ptfs))
         self.action_export_json.setEnabled(True)
         self.action_export_log.setEnabled(bool(self._log_rows))
+        self.action_export_excel.setEnabled(True)
+        self.action_export_pdf.setEnabled(True)
+        self.action_print_ptf.setEnabled(bool(ptfs))
         self.action_save_now.setEnabled(self._store is not None)
 
     def _clear_summary(self) -> None:
@@ -1049,7 +1266,7 @@ class MainWindow(QMainWindow):
         for error in package.errors:
             label = QLabel(f"{error['message']}" + (f"\nHint: {error['hint']}" if error.get("hint") else ""))
             label.setWordWrap(True)
-            label.setStyleSheet(theme.banner_style(theme.ERR, theme.PE_ROW))
+            label.setStyleSheet(theme.banner_style(theme.status_colour("ERROR"), theme.row_colour("pe")))
             card.add(label)
             if self.settings.debug and error.get("detail"):
                 detail = QTextEdit()
@@ -1062,9 +1279,54 @@ class MainWindow(QMainWindow):
         for warning in dict.fromkeys(package.warnings):
             label = QLabel(warning)
             label.setWordWrap(True)
-            label.setStyleSheet(theme.banner_style(theme.WARN, theme.WARN_ROW))
+            label.setStyleSheet(theme.banner_style(theme.status_colour("WARNING"), theme.row_colour("warn")))
             card.add(label)
         return card
+
+    def _load_filter_profiles(self) -> None:
+        raw = QSettings().value("filters/ptf_profiles", "{}")
+        try:
+            profiles = json.loads(str(raw))
+        except (TypeError, ValueError):
+            profiles = {}
+        self._filter_profiles = profiles if isinstance(profiles, dict) else {}
+        if hasattr(self, "filter_profile"):
+            for name in sorted(self._filter_profiles):
+                self.filter_profile.addItem(name)
+
+    def save_filter_profile(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        name, accepted = QInputDialog.getText(self, "Save filter profile", "Profile name:")
+        if not accepted or not name.strip():
+            return
+        self._filter_profiles[name.strip()] = {
+            "search": self.search_box.text(), "fmid": self.fmid_combo.currentText(),
+            "only_pe": self.only_pe.isChecked(), "only_hold": self.only_hold.isChecked(),
+        }
+        QSettings().setValue("filters/ptf_profiles", json.dumps(self._filter_profiles))
+        if self.filter_profile.findText(name.strip()) < 0:
+            self.filter_profile.addItem(name.strip())
+        self.filter_profile.setCurrentText(name.strip())
+
+    def apply_filter_profile(self, index: int) -> None:
+        if index <= 0:
+            return
+        profile = self._filter_profiles.get(self.filter_profile.currentText())
+        if not profile:
+            return
+        self.search_box.setText(profile.get("search", ""))
+        position = self.fmid_combo.findText(profile.get("fmid", "All FMIDs"))
+        self.fmid_combo.setCurrentIndex(max(position, 0))
+        self.only_pe.setChecked(bool(profile.get("only_pe")))
+        self.only_hold.setChecked(bool(profile.get("only_hold")))
+
+    def delete_filter_profile(self) -> None:
+        name = self.filter_profile.currentText()
+        if self.filter_profile.currentIndex() <= 0 or name not in self._filter_profiles:
+            return
+        self._filter_profiles.pop(name)
+        QSettings().setValue("filters/ptf_profiles", json.dumps(self._filter_profiles))
+        self.filter_profile.removeItem(self.filter_profile.currentIndex())
 
     def _apply_ptf_filters(self) -> None:
         self.ptf_proxy.set_search(self.search_box.text())
@@ -1087,6 +1349,12 @@ class MainWindow(QMainWindow):
             return
         raw = raw_statements_for(self._report, ptf) if self._report is not None else []
         self.detail_panel.show_ptf(ptf, raw)
+
+    def _selected_ptf(self) -> Optional[PTFEntry]:
+        indexes = self.ptf_table.selectionModel().selectedRows()
+        if not indexes:
+            return None
+        return self.ptf_model.ptf_at(self.ptf_proxy.mapToSource(indexes[0]).row())
 
     def _refresh_contents(self) -> None:
         if self._report is None or not self._report.packages:
@@ -1157,7 +1425,7 @@ class MainWindow(QMainWindow):
         self.history_table.setModel(
             RowTableModel(
                 [summary.as_row() for summary in summaries],
-                ["ID", "Date", "Label", "Packages", "PTFs", "HOLDs", "Errors", "Duration (s)", "Sources"],
+                ["ID", "Date", "Label", "Archived", "Notes", "Packages", "PTFs", "HOLDs", "Errors", "Duration (s)", "Sources"],
             )
         )
         stats = self._store.stats()
@@ -1166,6 +1434,19 @@ class MainWindow(QMainWindow):
             f"{stats['unique_ptfs']} unique id(s) - {human_size(stats['size_bytes'])} - {stats['path']}"
         )
         self.status_database.set_value(f"{stats['analyses']} stored")
+        selected_before = self.compare_before.currentData() if hasattr(self, "compare_before") else None
+        selected_after = self.compare_after.currentData() if hasattr(self, "compare_after") else None
+        if hasattr(self, "compare_before"):
+            self.compare_before.clear()
+            self.compare_after.clear()
+            for summary in reversed(summaries):
+                label = f"#{summary.id}  {summary.created_local}  {summary.label}"
+                self.compare_before.addItem(label, summary.id)
+                self.compare_after.addItem(label, summary.id)
+            for combo, selected in ((self.compare_before, selected_before), (self.compare_after, selected_after)):
+                position = combo.findData(selected)
+                combo.setCurrentIndex(position if position >= 0 else max(combo.count() - 1, 0))
+        self.refresh_inventory()
 
     def _selected_history_id(self) -> Optional[int]:
         indexes = self.history_table.selectionModel().selectedRows()
@@ -1215,6 +1496,49 @@ class MainWindow(QMainWindow):
             self._store.rename(analysis_id, label.strip())
             self.refresh_history()
 
+    def note_selected_history(self) -> None:
+        analysis_id = self._selected_history_id()
+        if analysis_id is None or self._store is None:
+            return
+        from PySide6.QtWidgets import QInputDialog
+        current = next((s.notes for s in self._store.list_analyses(limit=self.settings.history_limit) if s.id == analysis_id), "")
+        notes, accepted = QInputDialog.getMultiLineText(self, "Analysis notes", "Notes:", current)
+        if accepted:
+            self._store.annotate(analysis_id, notes.strip())
+            self.refresh_history()
+
+    def archive_selected_history(self) -> None:
+        analysis_id = self._selected_history_id()
+        if analysis_id is None or self._store is None:
+            return
+        summary = next((s for s in self._store.list_analyses(limit=self.settings.history_limit) if s.id == analysis_id), None)
+        self._store.set_archived(analysis_id, not bool(summary and summary.archived))
+        self.refresh_history()
+
+    def run_comparison(self) -> None:
+        if self._store is None or self.compare_before.currentData() is None or self.compare_after.currentData() is None:
+            return
+        before_id, after_id = int(self.compare_before.currentData()), int(self.compare_after.currentData())
+        if before_id == after_id:
+            QMessageBox.information(self, "Compare", "Select two different analyses.")
+            return
+        try:
+            self._comparison_rows = compare_reports(self._store.load_report(before_id), self._store.load_report(after_id))
+        except Exception as exc:
+            QMessageBox.critical(self, "Compare", f"Analyses could not be compared.\n\n{exc}")
+            return
+        self.compare_table.setModel(RowTableModel(self._comparison_rows, ["Status", "PTF", "FMID", "PE", "Changed fields", "Description"]))
+        counts = comparison_summary(self._comparison_rows)
+        self.compare_summary.setText(" · ".join(f"{name}: {count}" for name, count in counts.items()))
+
+    def refresh_inventory(self) -> None:
+        if self._store is None or not hasattr(self, "inventory_table"):
+            return
+        rows = self._store.inventory(self.inventory_search.text().strip())
+        self.inventory_table.setModel(RowTableModel(rows, ["PTF", "Type", "FMID", "Seen", "First seen", "Last seen", "Ever PE"]))
+        duplicates = self._store.duplicate_packages()
+        self.duplicate_label.setText(f"{len(rows)} inventory row(s) · {len(duplicates)} repeated package fingerprint(s)")
+
     def delete_selected_history(self) -> None:
         analysis_id = self._selected_history_id()
         if analysis_id is None or self._store is None:
@@ -1251,31 +1575,95 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # exports
     # ------------------------------------------------------------------
+    def _export_target(self, filename: str) -> str:
+        return str(Path(self.settings.last_export_dir) / filename) if self.settings.last_export_dir else filename
+
+    def _remember_export(self, path: str) -> None:
+        self.settings.last_export_dir = str(Path(path).parent)
+        self.settings.save()
+
     def export_csv(self) -> None:
         if self._report is None:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save PTF list", "ptf_list.csv", "CSV files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save PTF list", self._export_target("ptf_list.csv"), "CSV files (*.csv)")
         if path:
-            Path(path).write_bytes(frame_to_csv(ptf_frame(self._report.ptfs)))
-            self.status_message.setText(f"PTF list written to {path}")
+            data = frame_to_csv(ptf_frame(self._report.ptfs))
+            if self.settings.mask_private_paths:
+                data = redact_sensitive(data.decode("utf-8-sig")).encode("utf-8-sig")
+            Path(path).write_bytes(data)
+            self._remember_export(path)
+            self.status_message.setText("PTF list written.")
 
     def export_json(self) -> None:
         if self._report is None:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save report", "ptf_report.json", "JSON files (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save report", self._export_target("ptf_report.json"), "JSON files (*.json)")
         if path:
-            Path(path).write_text(report_to_json(self._report), encoding="utf-8")
-            self.status_message.setText(f"Report written to {path}")
+            Path(path).write_text(redact_sensitive(report_to_json(self._report), self.settings.mask_private_paths), encoding="utf-8")
+            self._remember_export(path)
+            self.status_message.setText("Report written.")
 
     def export_log(self) -> None:
         if not self._log_rows:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save log", "analysis_log.csv", "CSV files (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save log", self._export_target("analysis_log.csv"), "CSV files (*.csv)")
         if path:
             import pandas as pd
 
-            Path(path).write_bytes(frame_to_csv(pd.DataFrame(self._log_rows)))
-            self.status_message.setText(f"Log written to {path}")
+            data = frame_to_csv(pd.DataFrame(self._log_rows))
+            if self.settings.mask_private_paths:
+                data = redact_sensitive(data.decode("utf-8-sig")).encode("utf-8-sig")
+            Path(path).write_bytes(data)
+            self._remember_export(path)
+            self.status_message.setText("Log written.")
+
+    def export_excel(self) -> None:
+        if self._report is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Corporate Excel report", self._export_target("ptf_analysis.xlsx"), "Excel workbook (*.xlsx)")
+        if not path:
+            return
+        try:
+            write_excel_report(self._report, Path(path), self._comparison_rows or None, self.settings.mask_private_paths)
+            self._remember_export(path)
+            self.status_message.setText("Corporate Excel report written.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Excel report", f"The report could not be written.\n\n{exc}")
+
+    def _report_html(self) -> str:
+        return printable_html(self._report, self.settings.company_name, self.settings.report_title,
+                              self.settings.logo_path, self._comparison_rows or None,
+                              self.settings.mask_private_paths)
+
+    def export_pdf(self) -> None:
+        if self._report is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Corporate PDF report", self._export_target("ptf_analysis.pdf"), "PDF document (*.pdf)")
+        if not path:
+            return
+        document = QTextDocument(self)
+        document.setHtml(self._report_html())
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        printer.setOutputFileName(path)
+        document.print_(printer)
+        self._remember_export(path)
+        self.status_message.setText("Corporate PDF report written.")
+
+    def print_selected_ptf(self) -> None:
+        ptf = self._selected_ptf()
+        if ptf is None:
+            QMessageBox.information(self, "Print PTF", "Select a PTF first.")
+            return
+        body = f"<h1>{html.escape(ptf.sysmod_id)}</h1><p><b>FMID:</b> {html.escape(', '.join(ptf.fmids))}</p><p>{html.escape(ptf.description)}</p>"
+        body += "<h2>Dependencies</h2><p><b>PRE:</b> " + html.escape(', '.join(ptf.pre)) + "<br><b>REQ:</b> " + html.escape(', '.join(ptf.req)) + "<br><b>SUP:</b> " + html.escape(', '.join(ptf.sup)) + "</p>"
+        body += "<h2>HOLD / actions</h2>" + "".join(f"<p><b>{html.escape(h.hold_type)}</b> {html.escape(h.reason)} — {html.escape(h.comment)}</p>" for h in ptf.holds)
+        document = QTextDocument(self)
+        document.setHtml(f"<html><body>{body}</body></html>")
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        preview = QPrintPreviewDialog(printer, self)
+        preview.paintRequested.connect(document.print_)
+        preview.exec()
 
     # ------------------------------------------------------------------
     # lifecycle

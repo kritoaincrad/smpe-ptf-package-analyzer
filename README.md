@@ -12,6 +12,20 @@ Windows ve Linux üzerinde, harici bir araç kurulmadan çalışır.
 Uygulama PySide6/Qt tabanlı yerel masaüstü arayüzüyle çalışır. Dosyalar diskte
 işlenir; sunucu veya tarayıcı gerekmez.
 
+### Ürün özellikleri
+
+- Açık/koyu tema, kalıcı sütun görünürlüğü, sıralama ve yeniden kullanılabilir PTF filtre profilleri
+- Son kullanılan klasörü hatırlayan, alt klasörleri destekleyen Explorer sürükle-bırak akışı
+- Geçmişteki iki analizi eklenen/kaldırılan/değişen PTF düzeyinde karşılaştırma
+- PTF ilk/son görülme, FMID envanteri ve SHA-256 ile tekrar yüklenen paket tespiti
+- Analiz etiketi, notu, arşiv durumu ve doğrulanmış veritabanı yedekleme/geri yükleme
+- Yönetici özeti, PE, kritik HOLD ve aksiyon bölümleri içeren Excel/PDF kurumsal raporlar
+- Firma adı, rapor başlığı, logo ve raporlarda hassas yol/e-posta/IP maskeleme
+- Yazdırılabilir PTF detay görünümü ve analiz tamamlandı masaüstü bildirimi
+- Varsayılan çevrimdışı analiz; analiz boyunca outbound socket bağlantıları engellenir
+- Arşiv traversal, aşırı member, büyük member ve olağandışı açılma oranı korumaları
+- Opsiyonel SQLCipher geçmiş şifrelemesi ve Ed25519 imzalı güncelleme manifesti
+
 ---
 
 ## 1. Kurulum
@@ -22,6 +36,19 @@ python -m pip install -r requirements.txt
 
 Gereksinim: **Python 3.11+**. `unlzw3` ve 7-Zip opsiyoneldir; uygulamanın kendi
 `.Z` decoder'ı her zaman mevcuttur.
+
+Geçmişi SQLCipher ile şifrelemek için Preferences > Security seçeneğini açın,
+`PTFANALYZER_DB_KEY` ortam değişkenini tanımlayın ve uyumlu `sqlcipher3` veya
+`pysqlcipher3` sürücüsünü kurun. Anahtar uygulama ayarlarına kaydedilmez.
+
+İmzalı güncelleme kontrolü için `PTFANALYZER_UPDATE_MANIFEST_URL` ve base64
+Ed25519 public key içeren `PTFANALYZER_UPDATE_PUBLIC_KEY` tanımlanmalıdır.
+Offline mode açıkken uygulama güncelleme sunucusuna bağlanmaz.
+
+Windows `.exe` üretimi `scripts/build_windows.ps1` ile yapılır. Kurumsal PFX
+sertifikası `SIGN_PFX_PATH` ve `SIGN_PFX_PASSWORD` üzerinden verilirse çıktı
+SHA-256 + timestamp ile imzalanır ve imza build sonunda doğrulanır. Sertifika
+ve parolası repoya yazılmaz.
 
 ### Masaüstü uygulaması (PySide6 / Qt)
 

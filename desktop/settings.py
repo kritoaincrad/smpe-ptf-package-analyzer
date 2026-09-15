@@ -34,6 +34,21 @@ class Settings:
     auto_save: bool = True
     history_limit: int = 200
 
+    # appearance and workflow
+    dark_theme: bool = False
+    notifications: bool = True
+    recursive_folders: bool = True
+    last_input_dir: str = ""
+    last_export_dir: str = ""
+
+    # corporate reports and privacy
+    company_name: str = ""
+    report_title: str = "SMP/E PTF Analysis Report"
+    logo_path: str = ""
+    mask_private_paths: bool = True
+    offline_mode: bool = True
+    encrypt_database: bool = False
+
     # diagnostics
     debug: bool = False
 
@@ -78,4 +93,6 @@ class Settings:
             max_nested_depth=self.nested_depth,
             analyze_duplicates=self.analyze_duplicates,
             debug=self.debug,
+            offline_mode=self.offline_mode,
+            redact_logs=self.mask_private_paths,
         )

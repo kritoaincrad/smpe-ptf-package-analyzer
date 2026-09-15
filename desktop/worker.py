@@ -26,6 +26,7 @@ from ptfanalyzer.models import AnalysisReport, PartRef
 from ptfanalyzer.parts import build_part_ref, group_parts
 from ptfanalyzer.pipeline import AnalyzerOptions, Workspace, run_analysis
 from ptfanalyzer.progress import Progress, ProgressEvent
+from ptfanalyzer.security import offline_guard
 
 
 class AnalysisCancelled(Exception):
@@ -105,7 +106,7 @@ class AnalysisWorker(QObject):
         self._cancel = True
 
     def run(self) -> None:
-        log = AnalysisLog(listener=self.log_entry.emit)
+        log = AnalysisLog(listener=self.log_entry.emit, redact=self._options.redact_logs)
         progress = Progress(self._on_progress)
         try:
             parts = list(self._parts)
@@ -125,7 +126,8 @@ class AnalysisWorker(QObject):
                     )
             self._checkpoint()
 
-            report = run_analysis(parts, self._workspace, self._options, log, progress)
+            with offline_guard(self._options.offline_mode):
+                report = run_analysis(parts, self._workspace, self._options, log, progress)
 
             # Saving happens before 'finished' so the GUI thread is never made
             # to wait for a multi megabyte write while tearing the thread down.

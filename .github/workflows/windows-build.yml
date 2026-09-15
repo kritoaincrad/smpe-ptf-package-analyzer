@@ -1,0 +1,35 @@
+name: Windows desktop build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version
+        required: true
+        default: 2.0.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt pyinstaller
+      - shell: powershell
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: |
+          if ($env:SIGN_PFX_BASE64) {
+            [IO.File]::WriteAllBytes("signing.pfx", [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
+            $env:SIGN_PFX_PATH = (Resolve-Path "signing.pfx").Path
+          }
+          ./scripts/build_windows.ps1 -Version "${{ inputs.version }}"
+          if (Test-Path "signing.pfx") { Remove-Item -LiteralPath "signing.pfx" -Force }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PTF-Analyzer-${{ inputs.version }}
+          path: dist/*.exe
+          if-no-files-found: error

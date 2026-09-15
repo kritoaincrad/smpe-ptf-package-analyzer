@@ -40,6 +40,12 @@ ROLE_PATTERNS: list[tuple[str, str]] = [
 
 NESTED_SUFFIXES = (".pax.z", ".pax", ".tar", ".tar.z", ".z")
 MAX_MEMBER_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 100_000
+
+
+def _unsafe_member_name(name: str) -> bool:
+    path = name.replace("\\", "/")
+    return path.startswith("/") or any(part == ".." for part in path.split("/")) or (len(path) > 1 and path[1] == ":")
 
 
 def classify(name: str) -> str:
@@ -148,6 +154,16 @@ def _walk_archive(
 ) -> None:
     with tar:
         for info in _iter_members(tar, contents, container, log):
+            if len(contents.members) >= MAX_ARCHIVE_MEMBERS:
+                message = f"Archive member limit ({MAX_ARCHIVE_MEMBERS:,}) reached; remaining entries were skipped."
+                contents.warnings.append(message)
+                log.warning(message)
+                break
+            if _unsafe_member_name(info.name):
+                message = f"Unsafe archive path '{info.name}' was rejected."
+                contents.warnings.append(message)
+                log.warning(message)
+                continue
             role = classify(info.name)
             member = ArchiveMember(
                 name=info.name,

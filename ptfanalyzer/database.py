@@ -22,6 +22,7 @@ Override with the ``PTFANALYZER_DB`` environment variable.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import sys
@@ -35,7 +36,7 @@ from typing import Any, Iterator, Optional
 from .models import AnalysisReport
 from .serialize import describe_sources, report_from_record, report_to_record
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -47,6 +48,8 @@ CREATE TABLE IF NOT EXISTS analyses (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at    TEXT    NOT NULL,
     label         TEXT    NOT NULL DEFAULT '',
+    notes         TEXT    NOT NULL DEFAULT '',
+    archived      INTEGER NOT NULL DEFAULT 0,
     sources       TEXT    NOT NULL DEFAULT '',
     app_version   TEXT    NOT NULL DEFAULT '',
     duration_s    REAL    NOT NULL DEFAULT 0,
@@ -124,6 +127,8 @@ class AnalysisSummary:
     error_count: int
     app_version: str = ""
     size_bytes: int = 0
+    notes: str = ""
+    archived: bool = False
 
     @property
     def created_local(self) -> str:
@@ -140,6 +145,8 @@ class AnalysisSummary:
             "ID": self.id,
             "Date": self.created_local,
             "Label": self.label,
+            "Archived": "YES" if self.archived else "",
+            "Notes": self.notes,
             "Packages": self.package_count,
             "PTFs": self.ptf_count,
             "HOLDs": self.hold_count,
@@ -161,15 +168,34 @@ class AnalysisStore:
     worker thread and a GUI thread without any locking ceremony.
     """
 
-    def __init__(self, path: Optional[Path] = None):
+    def __init__(self, path: Optional[Path] = None, encryption_key: str = ""):
         self.path = Path(path) if path else default_database_path()
+        self._encryption_key = encryption_key
+        self._driver = sqlite3
+        if encryption_key:
+            try:
+                from sqlcipher3 import dbapi2 as sqlcipher  # type: ignore
+            except ImportError:
+                try:
+                    from pysqlcipher3 import dbapi2 as sqlcipher  # type: ignore
+                except ImportError as exc:
+                    raise RuntimeError("SQLCipher encryption was requested, but no SQLCipher Python driver is installed.") from exc
+            self._driver = sqlcipher
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
+
+    def _open_connection(self, path: Path):
+        connection = self._driver.connect(str(path), timeout=30)
+        if self._encryption_key:
+            key_hex = hashlib.sha256(self._encryption_key.encode("utf-8")).hexdigest()
+            connection.execute(f"PRAGMA key = \"x'{key_hex}'\"")
+            connection.execute("PRAGMA cipher_memory_security = ON")
+        return connection
 
     # -- connection ------------------------------------------------------
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(str(self.path), timeout=30)
+        connection = self._open_connection(self.path)
         connection.row_factory = sqlite3.Row
         try:
             connection.execute("PRAGMA foreign_keys = ON")
@@ -185,6 +211,11 @@ class AnalysisStore:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(analyses)")}
+            if "notes" not in columns:
+                connection.execute("ALTER TABLE analyses ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+            if "archived" not in columns:
+                connection.execute("ALTER TABLE analyses ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
             connection.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -270,6 +301,14 @@ class AnalysisStore:
         with self.connect() as connection:
             connection.execute("UPDATE analyses SET label = ? WHERE id = ?", (label, analysis_id))
 
+    def annotate(self, analysis_id: int, notes: str) -> None:
+        with self.connect() as connection:
+            connection.execute("UPDATE analyses SET notes = ? WHERE id = ?", (notes, analysis_id))
+
+    def set_archived(self, analysis_id: int, archived: bool) -> None:
+        with self.connect() as connection:
+            connection.execute("UPDATE analyses SET archived = ? WHERE id = ?", (1 if archived else 0, analysis_id))
+
     def delete(self, analysis_id: int) -> None:
         with self.connect() as connection:
             connection.execute("DELETE FROM ptf_index WHERE analysis_id = ?", (analysis_id,))
@@ -285,7 +324,7 @@ class AnalysisStore:
     # -- reading ---------------------------------------------------------
     def list_analyses(self, limit: int = 200, search: str = "") -> list[AnalysisSummary]:
         query = (
-            "SELECT id, created_at, label, sources, app_version, duration_s, "
+            "SELECT id, created_at, label, notes, archived, sources, app_version, duration_s, "
             "package_count, ptf_count, hold_count, error_count, LENGTH(report_json) AS size "
             "FROM analyses "
         )
@@ -312,6 +351,8 @@ class AnalysisStore:
                 error_count=row["error_count"],
                 app_version=row["app_version"],
                 size_bytes=row["size"] or 0,
+                notes=row["notes"] or "",
+                archived=bool(row["archived"]),
             )
             for row in rows
         ]
@@ -381,6 +422,59 @@ class AnalysisStore:
             "unique_ptfs": unique,
             "size_bytes": size,
         }
+
+    def duplicate_packages(self) -> list[dict]:
+        """Fingerprints seen in more than one stored analysis."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT fingerprint, COUNT(*) AS seen, MIN(analysis_id) AS first_analysis,
+                          MAX(analysis_id) AS last_analysis, GROUP_CONCAT(DISTINCT name) AS packages
+                   FROM packages WHERE fingerprint <> '' GROUP BY fingerprint
+                   HAVING COUNT(*) > 1 ORDER BY seen DESC, last_analysis DESC"""
+            ).fetchall()
+        return [
+            {"SHA-256": row["fingerprint"], "Seen": row["seen"], "First analysis": row["first_analysis"],
+             "Last analysis": row["last_analysis"], "Packages": row["packages"]}
+            for row in rows
+        ]
+
+    def inventory(self, text: str = "", limit: int = 2000) -> list[dict]:
+        """Unique PTF inventory with first/last observation and FMID filtering."""
+        needle = f"%{text.strip()}%"
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT p.sysmod_id, p.sysmod_type, p.fmid, COUNT(DISTINCT p.analysis_id) AS seen,
+                          MIN(a.created_at) AS first_seen, MAX(a.created_at) AS last_seen,
+                          MAX(p.is_pe) AS ever_pe
+                   FROM ptf_index p JOIN analyses a ON a.id = p.analysis_id
+                   WHERE p.sysmod_id LIKE ? OR p.fmid LIKE ? OR p.description LIKE ?
+                   GROUP BY p.sysmod_id, p.sysmod_type, p.fmid
+                   ORDER BY last_seen DESC, p.sysmod_id LIMIT ?""",
+                (needle, needle, needle, int(limit)),
+            ).fetchall()
+        return [
+            {"PTF": row["sysmod_id"], "Type": row["sysmod_type"], "FMID": row["fmid"],
+             "Seen": row["seen"], "First seen": row["first_seen"], "Last seen": row["last_seen"],
+             "Ever PE": "YES" if row["ever_pe"] else ""}
+            for row in rows
+        ]
+
+    def backup_to(self, destination: Path) -> None:
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with self._open_connection(self.path) as source, self._open_connection(destination) as target:
+            source.backup(target)
+
+    def restore_from(self, source: Path) -> None:
+        source = Path(source)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        with self._open_connection(source) as backup, self._open_connection(self.path) as target:
+            check = backup.execute("PRAGMA integrity_check").fetchone()[0]
+            if check != "ok":
+                raise sqlite3.DatabaseError(f"Backup integrity check failed: {check}")
+            backup.backup(target)
+        self.initialize()
 
     def vacuum(self) -> None:
         with self.connect() as connection:
